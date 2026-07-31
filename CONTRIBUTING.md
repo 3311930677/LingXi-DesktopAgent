@@ -30,7 +30,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\run-dev.ps1
 
 1. 将 rime-ice 克隆到项目同级的 `rime-ice` 目录（若已存在则复用）；
 2. 启动加载 `8105.dict.yaml` 与 `base.dict.yaml` 的 `ime-server`；
-3. 检查 `nihao`、`suoyi`、`dang` 等候选；
+3. 检查 `nihao`、`suoyi`、`dang` 以及简拼 `nh`、`zgr` 等候选；
 4. 在另一个窗口启动 Tauri overlay。
 
 启动后 IME 模式默认开启。在任意文本框直接输入拼音，空格选首选、数字键选择候选；`Esc` 退出，`Ctrl+Alt+I` 再次开启/关闭。

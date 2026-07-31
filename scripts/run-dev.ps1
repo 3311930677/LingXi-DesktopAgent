@@ -28,13 +28,23 @@ function Test-ImePort {
     }
 }
 
+# Always restart project processes. Reusing an old ime-server was the main cause
+# of "tests pass but overlay still has no dang/simplified-pinyin" after code
+# changes: port 9527 was still owned by yesterday's binary.
+$OldProcesses = Get-Process -Name "ime-server", "overlay" -ErrorAction SilentlyContinue
+if ($OldProcesses) {
+    Write-Host "Stopping old LingXi processes..." -ForegroundColor Yellow
+    $OldProcesses | Stop-Process -Force
+    Start-Sleep -Milliseconds 500
+}
+
 if (-not (Test-ImePort)) {
     $serverCommand = "Set-Location -LiteralPath '$ProjectRoot'; cargo run -p ime-server -- --dict '$CharDict' --dict '$BaseDict'"
     Start-Process powershell.exe -ArgumentList @("-NoExit", "-Command", $serverCommand)
     Write-Host "Starting ime-server with rime-ice..." -ForegroundColor Cyan
 
     $Ready = $false
-    for ($i = 0; $i -lt 120; $i++) {
+    for ($i = 0; $i -lt 360; $i++) {
         if (Test-ImePort) {
             $Ready = $true
             break
@@ -42,7 +52,7 @@ if (-not (Test-ImePort)) {
         Start-Sleep -Milliseconds 250
     }
     if (-not $Ready) {
-        throw "ime-server did not become ready within 30 seconds"
+        throw "ime-server did not become ready within 90 seconds"
     }
 } else {
     Write-Host "ime-server is already listening on port 9527." -ForegroundColor Yellow

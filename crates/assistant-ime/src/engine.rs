@@ -197,6 +197,22 @@ impl PinyinInputEngine {
         }
     }
 
+    /// Add candidates matched by a pure simplified-pinyin key (`nh`, `zgr`).
+    /// The bonus keeps abbreviations useful while remaining below an exact
+    /// full-pinyin whole-word match (+48).
+    fn collect_abbreviations(&self, key: &str, acc: &mut HashMap<String, Candidate>) {
+        for entry in self.dictionary.lookup_abbreviation(key) {
+            Self::offer(
+                acc,
+                Candidate {
+                    text: entry.word.clone(),
+                    syllables: entry.syllables.clone(),
+                    score: Self::log_freq(entry.weight) + 24.0,
+                },
+            );
+        }
+    }
+
     /// Insert `candidate` into `acc`. On a text collision keep the better one:
     /// higher score wins, and on an (approximate) score tie the cleaner path —
     /// fewer syllables — wins, so `好` keeps `[hao]` rather than a junk `[ha, o]`.
@@ -217,15 +233,17 @@ impl PinyinInputEngine {
 
 impl InputEngine for PinyinInputEngine {
     fn candidates(&self, pinyin: &str, context: &InputContext) -> Vec<Candidate> {
-        let splits = segment(pinyin);
-        if splits.is_empty() {
+        let normalized = pinyin.trim().to_ascii_lowercase();
+        if normalized.is_empty() {
             return Vec::new();
         }
-
+        let splits = segment(&normalized);
         let mut acc: HashMap<String, Candidate> = HashMap::new();
-        // Consider the most promising splits (segment() returns them best-first);
-        // capping keeps highly ambiguous inputs bounded without losing the
-        // readings users actually mean.
+
+        // Full pinyin and simplified pinyin are independent candidate sources.
+        // Exact whole-word candidates carry a larger bonus and therefore win
+        // when a key happens to be both a legal syllable and an abbreviation.
+        self.collect_abbreviations(&normalized, &mut acc);
         for split in splits.iter().take(6) {
             self.collect_from_split(&split.syllables, &mut acc);
         }
@@ -350,6 +368,21 @@ mod tests {
         let engine = PinyinInputEngine::new(dict, Box::new(PrefixContextReranker::default()));
         let cs = engine.candidates("suoyi", &InputContext::default());
         assert_eq!(cs[0].text, "所以");
+    }
+
+    #[test]
+    fn simplified_pinyin_returns_multi_syllable_words() {
+        let engine = PinyinInputEngine::builtin();
+        let nh = engine.candidates("nh", &InputContext::with_limit(5));
+        assert_eq!(nh[0].text, "你好");
+        let zgr = engine.candidates("zgr", &InputContext::with_limit(5));
+        assert_eq!(zgr[0].text, "中国人");
+    }
+
+    #[test]
+    fn single_letter_does_not_trigger_abbreviation_flood() {
+        let engine = PinyinInputEngine::builtin();
+        assert!(engine.candidates("z", &InputContext::default()).is_empty());
     }
 
     #[test]

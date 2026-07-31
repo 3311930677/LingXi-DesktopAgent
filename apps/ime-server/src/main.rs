@@ -182,19 +182,20 @@ fn main() {
     } else {
         use assistant_ime::{Dictionary, PrefixContextReranker};
         let mut dict = Dictionary::new();
-        let mut total = 0;
         for path in &dict_files {
             match dict.load_file(path) {
-                Ok(n) => {
-                    println!("  loaded {n} entries from {path}");
-                    total += n;
+                Ok(0) => {
+                    eprintln!("ime-server: dictionary contains no entries: {path}");
+                    std::process::exit(1);
                 }
-                Err(e) => {
-                    eprintln!("  warning: cannot load {path}: {e}");
+                Ok(n) => println!("  loaded {n} entries from {path}"),
+                Err(error) => {
+                    eprintln!("ime-server: cannot load {path}: {error}");
+                    std::process::exit(1);
                 }
             }
         }
-        println!("  total: {total} dictionary entries");
+        println!("  total: {} dictionary entries", dict.entry_count());
         PinyinInputEngine::new(dict, Box::new(PrefixContextReranker::default()))
     };
 
@@ -232,6 +233,28 @@ mod tests {
         let resp = handle_request(&engine, &req);
         assert!(!resp.candidates.is_empty());
         assert_eq!(resp.candidates[0].text, "你好");
+    }
+
+    #[test]
+    fn query_supports_simplified_pinyin() {
+        let engine = PinyinInputEngine::builtin();
+        for (pinyin, expected) in [("nh", "你好"), ("zgr", "中国人")] {
+            let response = handle_request(
+                &engine,
+                &Request::Query {
+                    pinyin: pinyin.into(),
+                    context: String::new(),
+                    limit: 9,
+                },
+            );
+            assert!(
+                response
+                    .candidates
+                    .iter()
+                    .any(|candidate| candidate.text == expected),
+                "{pinyin} should contain {expected}"
+            );
+        }
     }
 
     #[test]

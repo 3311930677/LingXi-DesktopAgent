@@ -18,22 +18,30 @@ use std::collections::HashMap;
 use std::io;
 use std::path::Path;
 
-/// One dictionary record: a word, its toneless pinyin key with syllables joined
-/// (no spaces), and a frequency weight. Higher weight ranks earlier.
+use crate::segment::segment;
+
+/// One dictionary record: a word, its toneless pinyin and frequency weight.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DictionaryEntry {
     pub word: String,
-    /// Pinyin syllables joined without separators, e.g. `nihao`. This is the
-    /// key the engine looks up.
+    /// Pinyin syllables joined without separators, e.g. `nihao`.
     pub pinyin: String,
+    /// Original syllable boundaries, e.g. `["ni", "hao"]`. They are retained
+    /// so the dictionary can build a compact simplified-pinyin index (`nh`).
+    pub syllables: Vec<String>,
     pub weight: u32,
 }
 
-/// A frequency-weighted pinyin dictionary with exact-key and fuzzy lookup.
+/// A frequency-weighted pinyin dictionary with exact, fuzzy and abbreviated
+/// lookup. Indexes store entry IDs rather than duplicating 500k rime-ice words.
 #[derive(Debug, Clone, Default)]
 pub struct Dictionary {
-    /// Exact toneless pinyin key → entries sharing that key (homophones).
-    by_pinyin: HashMap<String, Vec<DictionaryEntry>>,
+    entries: Vec<DictionaryEntry>,
+    /// Exact toneless joined pinyin → entry IDs.
+    by_pinyin: HashMap<String, Vec<usize>>,
+    /// Syllable initials (`ni hao` → `nh`) → entry IDs. Only multi-syllable
+    /// entries are indexed; single-letter abbreviation queries are rejected.
+    by_abbreviation: HashMap<String, Vec<usize>>,
     /// Whether common fuzzy-pinyin equivalences are applied on lookup.
     fuzzy: bool,
 }
@@ -43,7 +51,9 @@ impl Dictionary {
     /// users routinely rely on `zh/z`, `in/ing` tolerance.
     pub fn new() -> Self {
         Self {
+            entries: Vec::new(),
             by_pinyin: HashMap::new(),
+            by_abbreviation: HashMap::new(),
             fuzzy: true,
         }
     }
@@ -55,17 +65,29 @@ impl Dictionary {
         self
     }
 
-    /// Insert one entry, keeping entries under the same key sorted by
-    /// descending weight so the most frequent homophone is first.
+    /// Insert one entry and build both full-pinyin and simplified-pinyin indexes.
+    /// Space/apostrophe-separated pinyin retains explicit syllable boundaries;
+    /// joined pinyin is segmented automatically when possible.
     pub fn insert(&mut self, word: impl Into<String>, pinyin: impl Into<String>, weight: u32) {
-        let entry = DictionaryEntry {
-            word: word.into(),
-            pinyin: normalize_key(&pinyin.into()),
+        let word = word.into();
+        let raw_pinyin = pinyin.into();
+        let syllables = syllables_from_pinyin(&raw_pinyin, word.chars().count());
+        let joined = normalize_key(&raw_pinyin);
+        let abbreviation = abbreviation_key(&syllables);
+        let id = self.entries.len();
+        self.entries.push(DictionaryEntry {
+            word,
+            pinyin: joined.clone(),
+            syllables,
             weight,
-        };
-        let bucket = self.by_pinyin.entry(entry.pinyin.clone()).or_default();
-        bucket.push(entry);
-        bucket.sort_by(|a, b| b.weight.cmp(&a.weight).then_with(|| a.word.cmp(&b.word)));
+        });
+        self.by_pinyin.entry(joined).or_default().push(id);
+        if let Some(abbreviation) = abbreviation {
+            self.by_abbreviation
+                .entry(abbreviation)
+                .or_default()
+                .push(id);
+        }
     }
 
     /// Number of distinct pinyin keys held.
@@ -75,39 +97,49 @@ impl Dictionary {
 
     /// Whether the dictionary holds no entries.
     pub fn is_empty(&self) -> bool {
-        self.by_pinyin.is_empty()
+        self.entries.is_empty()
+    }
+
+    /// Number of loaded dictionary entries (including homophones).
+    pub fn entry_count(&self) -> usize {
+        self.entries.len()
     }
 
     /// Exact lookup of all words whose pinyin key equals `key` (already
-    /// syllable-joined), best-weighted first. With fuzzy on, keys that differ
-    /// only by a tolerated equivalence also match but with a reduced weight so
-    /// they never outrank an exact hit.
+    /// syllable-joined), best-weighted first. Fuzzy matching is only attempted
+    /// when no exact key exists.
     pub fn lookup(&self, key: &str) -> Vec<&DictionaryEntry> {
         let key = normalize_key(key);
-        let mut out: Vec<&DictionaryEntry> = Vec::new();
-        if let Some(bucket) = self.by_pinyin.get(&key) {
-            out.extend(bucket.iter());
-        }
-        // If we have exact hits, skip fuzzy entirely — the exact results are
-        // always correct and much faster (no full-table scan).
-        if !out.is_empty() || !self.fuzzy {
-            out.sort_by(|a, b| b.weight.cmp(&a.weight).then_with(|| a.word.cmp(&b.word)));
-            out.dedup_by(|a, b| a.word == b.word && a.pinyin == b.pinyin);
-            return out;
-        }
-        // Fuzzy fallback: only when exact match found nothing.
-        let canon = fuzzy_canon(&key);
-        for (candidate, bucket) in &self.by_pinyin {
-            if candidate == &key {
-                continue;
-            }
-            if fuzzy_canon(candidate) == canon {
-                out.extend(bucket.iter());
+        let mut ids = self.by_pinyin.get(&key).cloned().unwrap_or_default();
+        if ids.is_empty() && self.fuzzy {
+            let canon = fuzzy_canon(&key);
+            for (candidate, bucket) in &self.by_pinyin {
+                if candidate != &key && fuzzy_canon(candidate) == canon {
+                    ids.extend(bucket.iter().copied());
+                }
             }
         }
-        out.sort_by(|a, b| b.weight.cmp(&a.weight).then_with(|| a.word.cmp(&b.word)));
-        out.dedup_by(|a, b| a.word == b.word && a.pinyin == b.pinyin);
-        out
+        self.sorted_entries(ids)
+    }
+
+    /// Lookup a pure simplified-pinyin key such as `nh` (你好) or `zgr`
+    /// (中国人). A single letter is deliberately rejected to avoid enormous,
+    /// noisy candidate sets.
+    pub fn lookup_abbreviation(&self, key: &str) -> Vec<&DictionaryEntry> {
+        let key = normalize_key(key);
+        if key.len() < 2 || !key.bytes().all(|byte| byte.is_ascii_lowercase()) {
+            return Vec::new();
+        }
+        self.sorted_entries(self.by_abbreviation.get(&key).cloned().unwrap_or_default())
+    }
+
+    fn sorted_entries(&self, mut ids: Vec<usize>) -> Vec<&DictionaryEntry> {
+        ids.sort_unstable();
+        ids.dedup();
+        let mut entries: Vec<&DictionaryEntry> =
+            ids.into_iter().map(|id| &self.entries[id]).collect();
+        entries.sort_by(|a, b| b.weight.cmp(&a.weight).then_with(|| a.word.cmp(&b.word)));
+        entries
     }
 
     /// Load entries from a rime-ice-style text table. Each non-empty,
@@ -198,45 +230,80 @@ impl Dictionary {
         // ranking behaves plausibly in tests.
         const ENTRIES: &[(&str, &str, u32)] = &[
             ("你", "ni", 9000),
-            ("你好", "nihao", 5000),
+            ("你好", "ni hao", 5000),
             ("好", "hao", 8000),
             ("号", "hao", 3000),
-            ("你们", "nimen", 2600),
+            ("你们", "ni men", 2600),
             ("我", "wo", 9500),
-            ("我们", "women", 4200),
+            ("我们", "wo men", 4200),
             ("爱", "ai", 3000),
             ("中", "zhong", 4000),
-            ("中国", "zhongguo", 5200),
+            ("中国", "zhong guo", 5200),
+            ("中国人", "zhong guo ren", 4100),
             ("国", "guo", 3500),
-            ("世界", "shijie", 3800),
+            ("世界", "shi jie", 3800),
             ("世", "shi", 1500),
             ("界", "jie", 1200),
             ("先", "xian", 2600),
-            ("西安", "xian", 1800),
-            ("现在", "xianzai", 2400),
-            ("输入", "shuru", 2200),
-            ("输入法", "shurufa", 2600),
-            ("方法", "fangfa", 2000),
+            ("西安", "xi an", 1800),
+            ("现在", "xian zai", 2400),
+            ("输入", "shu ru", 2200),
+            ("输入法", "shu ru fa", 2600),
+            ("方法", "fang fa", 2000),
             ("法", "fa", 1400),
             ("是", "shi", 9800),
             ("的", "de", 12000),
-            ("测试", "ceshi", 2100),
-            ("智能", "zhineng", 2300),
-            ("助手", "zhushou", 2000),
-            ("拼音", "pinyin", 2500),
-            ("候选", "houxuan", 1600),
+            ("测试", "ce shi", 2100),
+            ("智能", "zhi neng", 2300),
+            ("助手", "zhu shou", 2000),
+            ("拼音", "pin yin", 2500),
+            ("候选", "hou xuan", 1600),
             ("词", "ci", 1700),
-            ("今天", "jintian", 3100),
-            ("天气", "tianqi", 2400),
+            ("今天", "jin tian", 3100),
+            ("天气", "tian qi", 2400),
             ("很", "hen", 5200),
-            ("不错", "bucuo", 2200),
-            ("谢谢", "xiexie", 3000),
+            ("不错", "bu cuo", 2200),
+            ("谢谢", "xie xie", 3000),
         ];
         for &(word, pinyin, weight) in ENTRIES {
             dict.insert(word, pinyin, weight);
         }
         dict
     }
+}
+
+fn syllables_from_pinyin(pinyin: &str, word_chars: usize) -> Vec<String> {
+    let normalized = pinyin.trim().to_ascii_lowercase().replace('ü', "v");
+    let explicit: Vec<String> = normalized
+        .split(|ch: char| ch.is_whitespace() || ch == '\'')
+        .filter(|part| !part.is_empty())
+        .map(str::to_string)
+        .collect();
+    if explicit.len() > 1 {
+        return explicit;
+    }
+
+    let joined = normalize_key(&normalized);
+    let splits = segment(&joined);
+    // Prefer a split matching the number of Han characters. This resolves
+    // common joined dictionary entries such as `nihao` without misreading a
+    // single-syllable word such as `xian`.
+    splits
+        .iter()
+        .find(|split| split.syllables.len() == word_chars && split.consumed == joined.len())
+        .or_else(|| splits.iter().find(|split| split.consumed == joined.len()))
+        .map(|split| split.syllables.clone())
+        .unwrap_or_else(|| vec![joined])
+}
+
+fn abbreviation_key(syllables: &[String]) -> Option<String> {
+    if syllables.len() < 2 {
+        return None;
+    }
+    syllables
+        .iter()
+        .map(|syllable| syllable.chars().next())
+        .collect()
 }
 
 /// Normalize a pinyin key for storage/lookup: lowercased, apostrophes and
@@ -328,6 +395,28 @@ mod tests {
         // Space-separated syllables in the pinyin column are joined on insert.
         assert_eq!(dict.lookup("nihao")[0].word, "你好");
         assert_eq!(dict.lookup("shijie")[0].word, "世界");
+        assert_eq!(dict.lookup_abbreviation("nh")[0].word, "你好");
+        assert_eq!(dict.lookup_abbreviation("sj")[0].word, "世界");
+    }
+
+    #[test]
+    fn abbreviation_index_uses_syllable_initials_and_frequency() {
+        let mut dict = Dictionary::new();
+        dict.insert("你好", "ni hao", 5000);
+        dict.insert("年号", "nian hao", 1000);
+        dict.insert("中国人", "zhong guo ren", 4000);
+        let nh = dict.lookup_abbreviation("nh");
+        assert_eq!(nh[0].word, "你好");
+        assert_eq!(nh[1].word, "年号");
+        assert_eq!(dict.lookup_abbreviation("zgr")[0].word, "中国人");
+        assert!(dict.lookup_abbreviation("n").is_empty());
+    }
+
+    #[test]
+    fn joined_pinyin_infers_boundaries_for_abbreviation() {
+        let mut dict = Dictionary::new();
+        dict.insert("你好", "nihao", 5000);
+        assert_eq!(dict.lookup_abbreviation("nh")[0].word, "你好");
     }
 
     #[test]
