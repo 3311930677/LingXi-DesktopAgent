@@ -29,8 +29,8 @@ use assistant_inference::{
     CloudBackend, CloudConfig, LocalBackend, ModelBackend, ModelTask,
 };
 use assistant_windows::{
-    qq_latest_message, qq_write_draft, remember_foreground_if_qq, run_assistant_hotkey_loop,
-    wait_for_trigger_release, AssistantHotkey, WindowsAdapter,
+    insert_text_at_caret, qq_latest_message, qq_write_draft, remember_foreground_if_qq,
+    run_assistant_hotkey_loop, wait_for_trigger_release, AssistantHotkey, WindowsAdapter,
 };
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, PhysicalPosition, PhysicalSize, State, WebviewWindow};
@@ -38,7 +38,10 @@ use windows::Win32::Foundation::{HWND, POINT};
 use windows::Win32::Graphics::Gdi::{
     GetMonitorInfoW, MonitorFromPoint, MONITORINFO, MONITOR_DEFAULTTONEAREST,
 };
-use windows::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, VK_BACK, VK_ESCAPE, VK_RETURN, VK_SPACE};
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    GetAsyncKeyState, ReleaseCapture, VK_BACK, VK_CONTROL, VK_ESCAPE, VK_LWIN, VK_MENU,
+    VK_RETURN, VK_RWIN, VK_SPACE,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
     GetCursorPos, GetWindowLongPtrW, SendMessageW, SetWindowLongPtrW, GWL_EXSTYLE,
     HTBOTTOMRIGHT, WM_NCLBUTTONDOWN, WS_EX_NOACTIVATE,
@@ -747,7 +750,7 @@ fn set_panel_focusable(app: AppHandle, focusable: bool) -> Result<(), String> {
 use std::sync::Arc;
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, SetWindowsHookExW, UnhookWindowsHookEx, GetMessageW as GetMsg,
-    HHOOK, KBDLLHOOKSTRUCT, MSG, WH_KEYBOARD_LL, HC_ACTION,
+    KBDLLHOOKSTRUCT, MSG, WH_KEYBOARD_LL, HC_ACTION,
 };
 
 /// Shared IME state between the hook thread, Tauri commands, and the frontend.
@@ -764,31 +767,19 @@ struct ImeCandidateView {
     score: f64,
 }
 
+#[derive(Default)]
 struct ImeShared {
     active: bool,
     pinyin: String,
     candidates: Vec<ImeCandidateView>,
     committed_context: String,
-    /// Hook handle — only valid on the hook thread.
-    hook: Option<HHOOK>,
+    /// Monotonic input revision. The worker computes candidates outside the
+    /// hook and only publishes them if this revision is still current.
+    revision: u64,
+    /// Candidate selected by Space/Enter/1-9/click. The worker takes this and
+    /// performs the clipboard paste outside the low-level hook callback.
+    pending_commit: Option<String>,
 }
-
-impl Default for ImeShared {
-    fn default() -> Self {
-        Self {
-            active: false,
-            pinyin: String::new(),
-            candidates: Vec::new(),
-            committed_context: String::new(),
-            hook: None,
-        }
-    }
-}
-
-// SAFETY: HHOOK is only accessed from the hook thread. The Mutex serializes
-// all other access. We mark Send+Sync to satisfy Arc<Mutex<>>.
-unsafe impl Send for ImeShared {}
-unsafe impl Sync for ImeShared {}
 
 static IME: std::sync::OnceLock<Arc<Mutex<ImeShared>>> = std::sync::OnceLock::new();
 
@@ -807,33 +798,21 @@ fn ime_state() -> ImeStateView {
     }
 }
 
-/// Commit a chosen candidate by index (called from frontend on number key or click).
+/// Queue a candidate chosen by mouse. Keyboard choices use the same queue from
+/// the hook; the worker performs the actual paste without stealing focus.
 #[tauri::command]
-fn ime_commit(state: State<AppState>, index: usize) -> Result<(), String> {
-    let text = {
-        let mut s = ime_shared().lock().unwrap();
-        let text = s.candidates.get(index).map(|c| c.text.clone());
-        if text.is_some() {
-            s.committed_context.push_str(text.as_ref().unwrap());
-            s.pinyin.clear();
-            s.candidates.clear();
-        }
-        text
-    };
-    let text = text.ok_or("invalid candidate index")?;
-
-    // Write into target application via controlled paste.
-    let snapshot = state
-        .snapshot
-        .lock()
-        .unwrap()
-        .clone()
-        .ok_or("no target captured")?;
-    let adapter = WindowsAdapter::new();
-    let receipt = adapter
-        .write_back(&snapshot, &text)
-        .map_err(|e| e.to_string())?;
-    *state.last_receipt.lock().unwrap() = Some(receipt);
+fn ime_commit(index: usize) -> Result<(), String> {
+    let mut s = ime_shared().lock().unwrap();
+    let text = s
+        .candidates
+        .get(index)
+        .map(|candidate| candidate.text.clone())
+        .ok_or("invalid candidate index")?;
+    s.committed_context.push_str(&text);
+    s.pending_commit = Some(text);
+    s.pinyin.clear();
+    s.candidates.clear();
+    s.revision = s.revision.wrapping_add(1);
     Ok(())
 }
 
@@ -846,41 +825,32 @@ fn ime_toggle() -> bool {
         s.pinyin.clear();
         s.candidates.clear();
         s.committed_context.clear();
+        s.pending_commit = None;
     }
+    s.revision = s.revision.wrapping_add(1);
     s.active
 }
 
-/// Refresh candidates from ime-server (or builtin engine).
-fn refresh_candidates(shared: &Arc<Mutex<ImeShared>>) {
-    let (pinyin, context) = {
-        let s = shared.lock().unwrap();
-        if s.pinyin.is_empty() {
-            let mut s2 = shared.lock().unwrap();
-            s2.candidates.clear();
-            return;
-        }
-        (s.pinyin.clone(), s.committed_context.clone())
+/// Compute candidates outside the keyboard hook. The caller publishes the
+/// result only when the pinyin revision is still current.
+fn compute_candidates(pinyin: &str, context: &str) -> Vec<ImeCandidateView> {
+    if let Some(results) = ipc_query(pinyin, context, 9) {
+        return results;
+    }
+    use assistant_ime::{InputContext, InputEngine, PinyinInputEngine};
+    let engine = PinyinInputEngine::builtin();
+    let ctx = InputContext {
+        preceding_text: context.to_string(),
+        max_candidates: 9,
     };
-    // drop lock before IPC
-    let candidates = if let Some(results) = ipc_query(&pinyin, &context, 9) {
-        results
-    } else {
-        use assistant_ime::{InputContext, InputEngine, PinyinInputEngine};
-        let engine = PinyinInputEngine::builtin();
-        let ctx = InputContext {
-            preceding_text: context,
-            max_candidates: 9,
-        };
-        engine
-            .candidates(&pinyin, &ctx)
-            .into_iter()
-            .map(|c| ImeCandidateView {
-                text: c.text,
-                score: c.score,
-            })
-            .collect()
-    };
-    shared.lock().unwrap().candidates = candidates;
+    engine
+        .candidates(pinyin, &ctx)
+        .into_iter()
+        .map(|candidate| ImeCandidateView {
+            text: candidate.text,
+            score: candidate.score,
+        })
+        .collect()
 }
 
 /// TCP call to the ime-server.
@@ -924,12 +894,10 @@ fn ipc_query(pinyin: &str, context: &str, limit: usize) -> Option<Vec<ImeCandida
 
 /// Spawn the global low-level keyboard hook thread.
 fn spawn_ime_hook_thread() {
-    let shared = ime_shared().clone();
     thread::spawn(move || {
         unsafe {
             let hook = SetWindowsHookExW(WH_KEYBOARD_LL, Some(ime_hook_proc), None, 0)
                 .expect("install keyboard hook");
-            shared.lock().unwrap().hook = Some(hook);
 
             // Must pump messages to keep the hook alive.
             let mut msg = MSG::default();
@@ -940,7 +908,100 @@ fn spawn_ime_hook_thread() {
     });
 }
 
-/// The low-level keyboard hook callback. Runs on the hook thread.
+/// Slow IME worker: resolves candidates, commits text, and manages the panel.
+/// Keeping all of this out of `ime_hook_proc` prevents Windows hook timeouts.
+fn spawn_ime_worker(app: AppHandle) {
+    let shared = ime_shared().clone();
+    thread::spawn(move || {
+        let mut seen_revision = u64::MAX;
+        let mut visible = false;
+        loop {
+            let pending = shared.lock().unwrap().pending_commit.take();
+            if let Some(text) = pending {
+                if let Err(error) = insert_text_at_caret(&text) {
+                    eprintln!("IME commit failed: {error}");
+                }
+            }
+
+            let (active, revision, pinyin, context) = {
+                let s = shared.lock().unwrap();
+                (
+                    s.active,
+                    s.revision,
+                    s.pinyin.clone(),
+                    s.committed_context.clone(),
+                )
+            };
+
+            if !active || pinyin.is_empty() {
+                if visible {
+                    if let Some(window) = app.get_webview_window("ime") {
+                        let _ = window.hide();
+                    }
+                    visible = false;
+                }
+                seen_revision = revision;
+            } else if revision != seen_revision {
+                let candidates = compute_candidates(&pinyin, &context);
+                let mut s = shared.lock().unwrap();
+                // Discard a stale server response if another key arrived.
+                if s.active && s.revision == revision && s.pinyin == pinyin {
+                    s.candidates = candidates;
+                    seen_revision = revision;
+                    drop(s);
+                    if let Some(window) = app.get_webview_window("ime") {
+                        position_ime_window(&window);
+                        let _ = window.show();
+                        visible = true;
+                    }
+                }
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+    });
+}
+
+/// Position at the real application caret when available, otherwise at cursor.
+fn position_ime_window(window: &WebviewWindow) {
+    use windows::Win32::Graphics::Gdi::ClientToScreen;
+    use windows::Win32::UI::WindowsAndMessaging::{GetGUIThreadInfo, GUITHREADINFO};
+
+    let mut info = GUITHREADINFO {
+        cbSize: std::mem::size_of::<GUITHREADINFO>() as u32,
+        ..Default::default()
+    };
+    let mut point = POINT::default();
+    let caret_found = unsafe { GetGUIThreadInfo(0, &mut info) }.is_ok()
+        && !info.hwndCaret.is_invalid()
+        && {
+            point.x = info.rcCaret.left;
+            point.y = info.rcCaret.bottom;
+            unsafe { ClientToScreen(info.hwndCaret, &mut point) }.as_bool()
+        };
+    if !caret_found && unsafe { GetCursorPos(&mut point) }.is_err() {
+        return;
+    }
+
+    let monitor = unsafe { MonitorFromPoint(point, MONITOR_DEFAULTTONEAREST) };
+    let mut info = MONITORINFO {
+        cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+        ..Default::default()
+    };
+    if !unsafe { GetMonitorInfoW(monitor, &mut info) }.as_bool() {
+        return;
+    }
+    let work = info.rcWork;
+    let size = window.outer_size().unwrap_or(PhysicalSize::new(620, 64));
+    let x = point.x.min(work.right - size.width as i32).max(work.left);
+    let y = (point.y + 8)
+        .min(work.bottom - size.height as i32)
+        .max(work.top);
+    let _ = window.set_position(PhysicalPosition::new(x, y));
+}
+
+/// The low-level hook callback. It must return quickly: doing TCP or clipboard
+/// work here makes Windows time out/remove the hook and leaks letters into the
+/// target. This function only updates state; the worker does all slow work.
 unsafe extern "system" fn ime_hook_proc(
     code: i32,
     wparam: windows::Win32::Foundation::WPARAM,
@@ -950,111 +1011,95 @@ unsafe extern "system" fn ime_hook_proc(
         return CallNextHookEx(None, code, wparam, lparam);
     }
 
-    let shared = ime_shared();
-    let is_active = shared.lock().unwrap().active;
-    if !is_active {
-        return CallNextHookEx(None, code, wparam, lparam);
-    }
-
-    // Only handle key-down events (WM_KEYDOWN = 0x0100).
-    if wparam.0 != 0x0100 {
-        return CallNextHookEx(None, code, wparam, lparam);
-    }
-
     let kb = &*(lparam.0 as *const KBDLLHOOKSTRUCT);
-    let vk = kb.vkCode as u16;
+    // Never intercept SendInput generated by our controlled paste; otherwise
+    // the injected Ctrl+V would become another pinyin `v`.
+    if kb.flags.0 & 0x10 != 0 {
+        return CallNextHookEx(None, code, wparam, lparam);
+    }
+    // Preserve Ctrl/Alt/Win shortcuts, including Ctrl+Alt+I which toggles mode.
+    let modifier_down = GetAsyncKeyState(VK_CONTROL.0 as i32) < 0
+        || GetAsyncKeyState(VK_MENU.0 as i32) < 0
+        || GetAsyncKeyState(VK_LWIN.0 as i32) < 0
+        || GetAsyncKeyState(VK_RWIN.0 as i32) < 0;
+    if modifier_down {
+        return CallNextHookEx(None, code, wparam, lparam);
+    }
 
+    let shared = ime_shared();
+    if !shared.lock().unwrap().active || wparam.0 != 0x0100 {
+        return CallNextHookEx(None, code, wparam, lparam);
+    }
+
+    let vk = kb.vkCode as u16;
     let handled = {
         let mut s = shared.lock().unwrap();
-
         if (0x41..=0x5A).contains(&vk) {
-            // A-Z: accumulate pinyin
-            let ch = (vk as u8 as char).to_ascii_lowercase();
-            s.pinyin.push(ch);
-            drop(s);
-            refresh_candidates(shared);
+            s.pinyin.push((vk as u8 as char).to_ascii_lowercase());
+            s.revision = s.revision.wrapping_add(1);
             true
         } else if vk == VK_BACK.0 && !s.pinyin.is_empty() {
             s.pinyin.pop();
-            if s.pinyin.is_empty() {
-                s.candidates.clear();
-            } else {
-                drop(s);
-                refresh_candidates(shared);
-            }
+            s.candidates.clear();
+            s.revision = s.revision.wrapping_add(1);
             true
-        } else if vk == VK_ESCAPE.0 && !s.pinyin.is_empty() {
+        } else if vk == VK_ESCAPE.0 {
+            // Escape always exits IME mode, even with an active composition.
+            s.active = false;
             s.pinyin.clear();
             s.candidates.clear();
+            s.committed_context.clear();
+            s.pending_commit = None;
+            s.revision = s.revision.wrapping_add(1);
             true
         } else if (vk == VK_SPACE.0 || vk == VK_RETURN.0) && !s.candidates.is_empty() {
-            // Select first candidate — commit handled by frontend poll
-            // For now: put chosen text in pinyin field prefixed with magic marker
-            // so frontend knows to commit.
-            if let Some(first) = s.candidates.first().cloned() {
-                s.committed_context.push_str(&first.text);
-                s.pinyin.clear();
-                s.candidates.clear();
-                // Signal commit: we'll write-back from a Tauri command instead.
-                // For now just clear; the frontend poll + a write_back helper handles it.
-                // Actually: do the write directly here since we're on a background thread.
-                // But we can't call WindowsAdapter from the hook thread safely.
-                // → Store pending commit text, let frontend pick it up.
-            }
+            queue_candidate(&mut s, 0);
             true
         } else if (0x31..=0x39).contains(&vk) && !s.candidates.is_empty() {
-            // Number keys 1-9
-            let idx = (vk - 0x31) as usize;
-            if let Some(chosen) = s.candidates.get(idx).cloned() {
-                s.committed_context.push_str(&chosen.text);
-                s.pinyin.clear();
-                s.candidates.clear();
-            }
-            true
-        } else if !s.pinyin.is_empty() {
-            // While composing, eat all other keys (don't let them through)
+            queue_candidate(&mut s, (vk - 0x31) as usize);
             true
         } else {
-            false
+            // Only eat non-letter keys while composing; ordinary keys pass
+            // through when the buffer is empty.
+            !s.pinyin.is_empty()
         }
     };
 
     if handled {
-        // Return 1 to block the key from reaching the target application.
         windows::Win32::Foundation::LRESULT(1)
     } else {
         CallNextHookEx(None, code, wparam, lparam)
     }
 }
 
+fn queue_candidate(state: &mut ImeShared, index: usize) {
+    if let Some(candidate) = state.candidates.get(index).cloned() {
+        state.committed_context.push_str(&candidate.text);
+        state.pending_commit = Some(candidate.text);
+        state.pinyin.clear();
+        state.candidates.clear();
+        state.revision = state.revision.wrapping_add(1);
+    }
+}
+
 fn on_ime(app: &AppHandle) {
-    // Toggle IME mode.
     let active = {
         let mut s = ime_shared().lock().unwrap();
         s.active = !s.active;
+        s.pinyin.clear();
+        s.candidates.clear();
+        s.pending_commit = None;
         if !s.active {
-            s.pinyin.clear();
-            s.candidates.clear();
             s.committed_context.clear();
         }
+        s.revision = s.revision.wrapping_add(1);
         s.active
     };
-
-    if active {
-        // Capture snapshot for write-back.
-        let adapter = WindowsAdapter::new();
-        if let Ok(snapshot) = adapter.capture_selection() {
-            let state = app.state::<AppState>();
-            *state.snapshot.lock().unwrap() = Some(snapshot);
-        }
-        // Show the candidate panel (no input box, just candidates).
-        if let Some(ime_win) = app.get_webview_window("ime") {
-            position_overlay(&ime_win);
-            let _ = ime_win.show();
-        }
-    } else {
-        if let Some(ime_win) = app.get_webview_window("ime") {
-            let _ = ime_win.hide();
+    // Activating mode does not show an empty panel; the worker shows it on the
+    // first letter. Deactivation hides immediately.
+    if !active {
+        if let Some(window) = app.get_webview_window("ime") {
+            let _ = window.hide();
         }
     }
 }
@@ -1092,6 +1137,11 @@ fn main() {
                 make_non_activating(&window).map_err(std::io::Error::other)?;
                 position_pet(&window);
             }
+            if let Some(window) = app.get_webview_window("ime") {
+                // The candidate bar must never steal focus from the editor;
+                // text is inserted at that editor's still-active caret.
+                make_non_activating(&window).map_err(std::io::Error::other)?;
+            }
             // Only local users need the GGUF. A persisted cloud configuration
             // must not trigger a needless ~400MB download at startup.
             if app.state::<AppState>().backend.lock().unwrap().backend == "local" {
@@ -1100,6 +1150,7 @@ fn main() {
             spawn_hotkey_worker(app.handle().clone());
             spawn_qq_foreground_sampler();
             spawn_ime_hook_thread();
+            spawn_ime_worker(app.handle().clone());
             Ok(())
         })
         .run(tauri::generate_context!())

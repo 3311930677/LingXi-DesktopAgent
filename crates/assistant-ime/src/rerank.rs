@@ -64,7 +64,10 @@ impl Default for PrefixContextReranker {
     fn default() -> Self {
         Self {
             repeat_penalty: 0.6,
-            coverage_bonus: 0.05,
+            // Candidate generation already rewards complete words. Keeping the
+            // default at zero avoids mistakenly rewarding a bad pinyin split
+            // merely because it contains more fragments (`su o yi` > `suo yi`).
+            coverage_bonus: 0.0,
         }
     }
 }
@@ -139,7 +142,11 @@ mod tests {
             cand("你", &["ni"], 1000.0),
             cand("你好", &["ni", "hao"], 1000.0),
         ];
-        PrefixContextReranker::default().rerank(&mut cs, &InputContext::default());
+        PrefixContextReranker {
+            coverage_bonus: 0.05,
+            ..Default::default()
+        }
+        .rerank(&mut cs, &InputContext::default());
         assert_eq!(cs[0].text, "你好");
     }
 }

@@ -28,6 +28,20 @@ pub use keyboard::{type_unicode, wait_for_trigger_release};
 pub use qq::{qq_latest_message, qq_write_draft, remember_foreground_if_qq, QqMessageSnapshot};
 pub use read::SelectionRead;
 
+/// Insert Unicode text at the current caret without requiring a selected range.
+///
+/// Used by the keyboard-hook IME path: its candidate window never takes focus,
+/// so the original editor remains foreground and a controlled paste inserts at
+/// exactly that editor's caret. The clipboard's Unicode text is restored after
+/// the paste. Unlike [`InputAdapter::write_back`], this intentionally has no
+/// selection snapshot because a normal IME inserts into an empty caret.
+pub fn insert_text_at_caret(text: &str) -> Result<(), AdapterError> {
+    if text.is_empty() {
+        return Ok(());
+    }
+    clipboard::paste_text_preserving_clipboard(text)
+}
+
 use com::ComGuard;
 use uia::UiaClient;
 

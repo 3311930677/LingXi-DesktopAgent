@@ -1,61 +1,111 @@
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
-body {
-  background: transparent;
-  font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
-  user-select: none;
-  overflow: hidden;
+:root {
+  color-scheme: dark;
+  font-family: "Microsoft YaHei UI", "PingFang SC", sans-serif;
 }
 
+html, body {
+  width: 100%;
+  height: 100%;
+  background: transparent;
+  overflow: hidden;
+  user-select: none;
+}
+
+body { padding: 6px; }
+
 #ime-panel {
-  background: rgba(30, 30, 42, 0.94);
-  backdrop-filter: blur(12px);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 8px;
-  padding: 6px 12px;
+  width: 100%;
+  height: 52px;
   display: flex;
   align-items: center;
-  gap: 12px;
-  min-height: 36px;
+  gap: 9px;
+  padding: 7px 10px;
+  overflow: hidden;
+  border: 1px solid rgba(156, 181, 255, 0.22);
+  border-radius: 14px;
+  background: linear-gradient(135deg, rgba(28, 31, 48, 0.97), rgba(20, 22, 35, 0.96));
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.38), inset 0 1px rgba(255, 255, 255, 0.055);
+  backdrop-filter: blur(18px) saturate(140%);
+}
+
+#mode-badge {
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border-radius: 9px;
+  color: #111521;
+  background: linear-gradient(145deg, #8ee7ff, #8ca8ff);
+  font-weight: 800;
+  font-size: 14px;
+  box-shadow: 0 4px 14px rgba(104, 184, 255, 0.25);
 }
 
 #pinyin-display {
-  color: #7ec8e3;
-  font-size: 14px;
-  font-weight: 500;
-  min-width: 40px;
-  letter-spacing: 0.5px;
+  flex: 0 0 auto;
+  min-width: 54px;
+  max-width: 116px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: #b9caff;
+  font: 600 15px/1.1 "Cascadia Code", "Consolas", monospace;
+  letter-spacing: 0.3px;
+}
+
+#divider {
+  flex: 0 0 auto;
+  width: 1px;
+  height: 24px;
+  background: linear-gradient(transparent, rgba(255,255,255,.18), transparent);
 }
 
 #candidates {
+  min-width: 0;
+  flex: 1 1 auto;
   display: flex;
-  gap: 6px;
   align-items: center;
+  gap: 5px;
+  overflow: hidden;
 }
 
 .candidate {
+  flex: 0 0 auto;
+  height: 34px;
   display: inline-flex;
   align-items: center;
-  gap: 3px;
-  padding: 3px 8px;
-  border-radius: 4px;
-  background: rgba(255, 255, 255, 0.06);
-  color: #f0f0f0;
+  gap: 5px;
+  padding: 0 9px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  color: rgba(239, 242, 255, 0.88);
+  background: rgba(255, 255, 255, 0.055);
   font-size: 15px;
   cursor: pointer;
-  transition: background 0.1s;
+  transition: background .12s ease, border-color .12s ease, transform .12s ease;
+}
+
+.candidate:first-child {
+  color: #f8fbff;
+  border-color: rgba(128, 201, 255, 0.28);
+  background: linear-gradient(135deg, rgba(80, 133, 255, 0.28), rgba(116, 91, 232, 0.22));
 }
 
 .candidate:hover {
-  background: rgba(126, 200, 227, 0.25);
+  transform: translateY(-1px);
+  border-color: rgba(142, 215, 255, 0.35);
+  background: rgba(117, 152, 255, 0.18);
 }
 
 .candidate .idx {
-  font-size: 11px;
-  color: #7ec8e3;
-  font-weight: 600;
+  color: #87d9ff;
+  font-size: 10px;
+  font-weight: 800;
 }
 
 .candidate .word {
-  font-size: 16px;
+  font-weight: 600;
+  white-space: nowrap;
 }

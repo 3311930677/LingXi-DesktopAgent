@@ -35,7 +35,8 @@ function schedulePoll() {
 
 function render(candidates) {
   candidatesEl.innerHTML = '';
-  candidates.forEach((c, i) => {
+  // Keep the compact bar readable; number keys 1-6 match visible entries.
+  candidates.slice(0, 6).forEach((c, i) => {
     const el = document.createElement('div');
     el.className = 'candidate';
     el.innerHTML = `<span class="idx">${i + 1}</span><span class="word">${esc(c.text)}</span>`;

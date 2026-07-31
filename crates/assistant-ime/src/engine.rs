@@ -153,7 +153,12 @@ impl PinyinInputEngine {
                 Candidate {
                     text: entry.word.clone(),
                     syllables: vec![whole_key.clone()],
-                    score: Self::log_freq(entry.weight),
+                    // An exact dictionary entry covering the complete input is
+                    // substantially more plausible than a Viterbi path made of
+                    // several individually frequent characters. Without this
+                    // word bonus, a large dictionary ranked 诉+哦 above 所以
+                    // because log-frequency addition rewards extra boundaries.
+                    score: Self::log_freq(entry.weight) + 48.0,
                 },
             );
         }
@@ -333,6 +338,18 @@ mod tests {
                 texts(&cs)
             );
         }
+    }
+
+    #[test]
+    fn whole_word_beats_high_frequency_character_split() {
+        let mut dict = Dictionary::new().with_fuzzy(false);
+        dict.insert("诉", "su", 667_093);
+        dict.insert("哦", "o", 3_563_330);
+        dict.insert("所以", "suoyi", 502_905);
+        dict.insert("一", "yi", 10_000_000);
+        let engine = PinyinInputEngine::new(dict, Box::new(PrefixContextReranker::default()));
+        let cs = engine.candidates("suoyi", &InputContext::default());
+        assert_eq!(cs[0].text, "所以");
     }
 
     #[test]
