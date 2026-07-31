@@ -11,6 +11,7 @@ rustup-init.exe
 *-check.err
 *-clippy-out.txt
 *-test-out.txt
+*.out
 run-*-clippy.bat
 run-*-tests.bat
 

@@ -64,17 +64,20 @@ impl PinyinInputEngine {
 
     /// Viterbi shortest-path over one syllable split: find the word
     /// segmentation maximizing total log-frequency. Returns the best sentence
-    /// (joined word text, total score) or `None` if no path covers all
-    /// syllables using dictionary words.
-    fn best_sentence(&self, syllables: &[String]) -> Option<(String, f64)> {
+    /// as `(joined word text, total score, pinyin path)`, where the path holds
+    /// each chosen word's joined pinyin key in order (so `你好` over `[ni, hao]`
+    /// yields the path `["nihao"]` if matched as one word, or `["ni", "hao"]` if
+    /// pieced together). `None` if no path covers all syllables.
+    #[allow(clippy::type_complexity)]
+    fn best_sentence(&self, syllables: &[String]) -> Option<(String, f64, Vec<String>)> {
         let n = syllables.len();
-        // best[i] = (score, text) for the best segmentation of syllables[..i].
-        let mut best: Vec<Option<(f64, String)>> = vec![None; n + 1];
-        best[0] = Some((0.0, String::new()));
+        // best[i] = (score, text, path) for the best segmentation of syllables[..i].
+        let mut best: Vec<Option<(f64, String, Vec<String>)>> = vec![None; n + 1];
+        best[0] = Some((0.0, String::new(), Vec::new()));
 
         for end in 1..=n {
             for start in 0..end {
-                let Some((prev_score, prev_text)) = best[start].clone() else {
+                let Some((prev_score, prev_text, prev_path)) = best[start].clone() else {
                     continue;
                 };
                 let key: String = syllables[start..end].concat();
@@ -96,13 +99,17 @@ impl PinyinInputEngine {
                 };
                 let score = prev_score + step;
                 let text = format!("{prev_text}{word}");
+                let mut path = prev_path.clone();
+                path.push(key);
                 match &best[end] {
-                    Some((existing, _)) if *existing >= score => {}
-                    _ => best[end] = Some((score, text)),
+                    Some((existing, _, _)) if *existing >= score => {}
+                    _ => best[end] = Some((score, text, path)),
                 }
             }
         }
-        best[n].clone().map(|(score, text)| (text, score))
+        best[n]
+            .clone()
+            .map(|(score, text, path)| (text, score, path))
     }
 
     /// Collect candidates for a single syllable split into `acc`, keyed by text
@@ -113,31 +120,40 @@ impl PinyinInputEngine {
             return;
         }
 
-        // 1) Best full-sentence path over all syllables.
-        if let Some((text, score)) = self.best_sentence(syllables) {
-            Self::offer(
-                acc,
-                Candidate {
-                    text,
-                    syllables: syllables.to_vec(),
-                    // Bias full coverage above shorter fragments of equal per-word
-                    // frequency without distorting the log-scale ordering.
-                    score: score + n as f64,
-                },
-            );
+        // 1) Best full-sentence path over all syllables. Its coverage is the
+        // whole input regardless of how the split fragmented it, so it is NOT
+        // biased by the fragment count `n` (that used to let a junk split like
+        // `[ha, o]` outrank the clean `[hao]` for the same word). Promotion of
+        // longer *real* words is the reranker's job via `Candidate::coverage`.
+        //
+        // A path that still contains raw-pinyin placeholders (unresolved
+        // syllables surface as ASCII letters in `text`) is only worth offering
+        // when it is *fully* raw — a legitimate "no dictionary word" fallback.
+        // A partially-resolved mash-up such as `你好o` is noise and is dropped.
+        if let Some((text, score, path)) = self.best_sentence(syllables) {
+            if !is_partial_placeholder(&text) {
+                Self::offer(
+                    acc,
+                    Candidate {
+                        text,
+                        syllables: path,
+                        score,
+                    },
+                );
+            }
         }
 
         // 2) Whole-input dictionary words (e.g. `nihao` → 你好 directly), which
         // may beat the pieced-together sentence and are what users expect for
-        // common words.
+        // common words. Their pinyin is the whole input as one word.
         let whole_key: String = syllables.concat();
         for entry in self.dictionary.lookup(&whole_key) {
             Self::offer(
                 acc,
                 Candidate {
                     text: entry.word.clone(),
-                    syllables: syllables.to_vec(),
-                    score: Self::log_freq(entry.weight) + n as f64,
+                    syllables: vec![whole_key.clone()],
+                    score: Self::log_freq(entry.weight),
                 },
             );
         }
@@ -159,38 +175,33 @@ impl PinyinInputEngine {
             }
         }
 
-        // 4) First-syllable single characters as a guaranteed non-empty
-        // fallback (every legal syllable maps to at least the raw pinyin).
+        // 4) First-syllable single characters, so a partial input always shows
+        // its leading character(s). Raw-pinyin fallback for an unknown syllable
+        // is handled once by the caller on the best split only, to avoid junk
+        // splits (`[ha, o]` of `hao`) injecting bare-latin noise like `ha`.
         let first = &syllables[0];
-        let hits = self.dictionary.lookup(first);
-        if hits.is_empty() {
+        for entry in self.dictionary.lookup(first) {
             Self::offer(
                 acc,
                 Candidate {
-                    text: first.clone(),
+                    text: entry.word.clone(),
                     syllables: vec![first.clone()],
-                    score: self.unknown_weight.ln(),
+                    score: Self::log_freq(entry.weight),
                 },
             );
-        } else {
-            for entry in hits {
-                Self::offer(
-                    acc,
-                    Candidate {
-                        text: entry.word.clone(),
-                        syllables: vec![first.clone()],
-                        score: Self::log_freq(entry.weight),
-                    },
-                );
-            }
         }
     }
 
-    /// Insert `candidate` into `acc`, keeping the higher score on collision.
+    /// Insert `candidate` into `acc`. On a text collision keep the better one:
+    /// higher score wins, and on an (approximate) score tie the cleaner path —
+    /// fewer syllables — wins, so `好` keeps `[hao]` rather than a junk `[ha, o]`.
     fn offer(acc: &mut HashMap<String, Candidate>, candidate: Candidate) {
         acc.entry(candidate.text.clone())
             .and_modify(|existing| {
-                if candidate.score > existing.score {
+                let better_score = candidate.score > existing.score + f64::EPSILON;
+                let tie = (candidate.score - existing.score).abs() <= f64::EPSILON;
+                let cleaner = tie && candidate.syllables.len() < existing.syllables.len();
+                if better_score || cleaner {
                     existing.score = candidate.score;
                     existing.syllables = candidate.syllables.clone();
                 }
@@ -214,6 +225,25 @@ impl InputEngine for PinyinInputEngine {
             self.collect_from_split(&split.syllables, &mut acc);
         }
 
+        // Guaranteed non-empty fallback: if nothing resolved to a dictionary
+        // word (e.g. a legal but out-of-vocabulary syllable such as `den`),
+        // surface the raw best-split reading so the panel is never empty. This
+        // runs on the best split only, so junk splits cannot inject bare-latin
+        // noise like `ha` for `hao`.
+        if acc.is_empty() {
+            if let Some(best) = splits.first() {
+                let text: String = best.syllables.concat();
+                Self::offer(
+                    &mut acc,
+                    Candidate {
+                        text,
+                        syllables: best.syllables.clone(),
+                        score: self.unknown_weight.ln(),
+                    },
+                );
+            }
+        }
+
         let mut candidates: Vec<Candidate> = acc.into_values().collect();
         // Initial engine order: score desc, then longer coverage, then text for
         // determinism. The reranker refines this using context.
@@ -232,6 +262,16 @@ impl InputEngine for PinyinInputEngine {
         }
         candidates
     }
+}
+
+/// Whether `text` is a partially-resolved Viterbi path: it mixes real Chinese
+/// characters with leftover raw-pinyin ASCII letters (e.g. `你好o`). Such a
+/// mash-up is noise. A fully-Chinese result and a fully-raw ASCII fallback are
+/// both *not* partial and are kept.
+fn is_partial_placeholder(text: &str) -> bool {
+    let has_ascii_letter = text.bytes().any(|b| b.is_ascii_alphabetic());
+    let has_non_ascii = !text.is_ascii();
+    has_ascii_letter && has_non_ascii
 }
 
 #[cfg(test)]
@@ -256,6 +296,43 @@ mod tests {
         let words = texts(&cs);
         assert_eq!(words[0], "好"); // weight 8000 > 号 3000
         assert!(words.contains(&"号"));
+    }
+
+    #[test]
+    fn candidate_syllables_reflect_the_clean_split() {
+        // Regression: a junk split `[ha, o]` must not overwrite `好`'s syllable
+        // field, which should stay the clean single syllable `[hao]`.
+        let engine = PinyinInputEngine::builtin();
+        let cs = engine.candidates("hao", &InputContext::default());
+        let hao = cs.iter().find(|c| c.text == "好").expect("好 present");
+        assert_eq!(hao.syllables, vec!["hao"]);
+    }
+
+    #[test]
+    fn no_bare_latin_noise_from_junk_splits() {
+        // `hao` used to leak a bare `ha` candidate via the `[ha, o]` split.
+        let engine = PinyinInputEngine::builtin();
+        let cs = engine.candidates("hao", &InputContext::default());
+        assert!(
+            cs.iter()
+                .all(|c| !c.text.bytes().all(|b| b.is_ascii_alphabetic())),
+            "no all-latin junk candidate expected, got {:?}",
+            texts(&cs)
+        );
+    }
+
+    #[test]
+    fn no_partial_placeholder_candidates() {
+        // A Han+latin mash-up like `你好o` must never be offered.
+        let engine = PinyinInputEngine::builtin();
+        for pinyin in ["nihao", "woaizhongguo", "nihaoshijie"] {
+            let cs = engine.candidates(pinyin, &InputContext::default());
+            assert!(
+                cs.iter().all(|c| !is_partial_placeholder(&c.text)),
+                "partial placeholder leaked for {pinyin}: {:?}",
+                texts(&cs)
+            );
+        }
     }
 
     #[test]

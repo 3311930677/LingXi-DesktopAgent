@@ -8,11 +8,15 @@
 //! normalization.
 //!
 //! For real use, [`Dictionary::load_text`] ingests a rime-ice-style table
-//! (`word<TAB>pinyin<TAB>weight`, `#` comments allowed). A compact built-in
-//! dictionary ([`Dictionary::builtin`]) keeps the engine usable and fully
-//! unit-testable offline.
+//! (`word<TAB>pinyin<TAB>weight`, `#` comments and rime YAML front-matter
+//! allowed), and [`Dictionary::load_file`] / [`Dictionary::from_files`] read
+//! such tables from disk. A compact built-in dictionary
+//! ([`Dictionary::builtin`]) keeps the engine usable and fully unit-testable
+//! offline.
 
 use std::collections::HashMap;
+use std::io;
+use std::path::Path;
 
 /// One dictionary record: a word, its toneless pinyin key with syllables joined
 /// (no spaces), and a frequency weight. Higher weight ranks earlier.
@@ -103,22 +107,79 @@ impl Dictionary {
     /// non-comment line is `word<TAB or spaces>pinyin[<TAB or spaces>weight]`.
     /// A missing weight defaults to `1`; malformed lines are skipped. Returns
     /// the number of entries added.
+    ///
+    /// Real rime `.dict.yaml` files begin with a YAML front-matter block
+    /// (`---` … `...`) before the tab-separated table; it is detected and
+    /// skipped so such files can be ingested unchanged. The pinyin column may
+    /// contain space-separated syllables (rime's `ni hao`); they are joined on
+    /// insert, so both `nihao` and `ni hao` work.
     pub fn load_text(&mut self, text: &str) -> usize {
         let mut added = 0;
+        let mut in_front_matter = false;
         for line in text.lines() {
-            let line = line.trim();
-            if line.is_empty() || line.starts_with('#') {
+            let trimmed = line.trim();
+            // Skip a leading rime YAML front-matter block. `---` opens it and a
+            // lone `...` (or the first tab-separated data line) closes it.
+            if trimmed == "---" {
+                in_front_matter = true;
                 continue;
             }
-            let mut cols = line.split_whitespace();
-            let (Some(word), Some(pinyin)) = (cols.next(), cols.next()) else {
+            if in_front_matter {
+                if trimmed == "..." {
+                    in_front_matter = false;
+                }
                 continue;
+            }
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
+            // rime tables are tab-separated: word <TAB> pinyin <TAB> weight,
+            // where pinyin may itself contain spaces ("ni hao"). Prefer tab
+            // splitting; fall back to whitespace for the simpler `word pinyin`
+            // form used in tests and hand-written lists.
+            let (word, pinyin, weight) = if trimmed.contains('\t') {
+                let mut cols = trimmed.split('\t').map(str::trim);
+                let (Some(word), Some(pinyin)) = (cols.next(), cols.next()) else {
+                    continue;
+                };
+                let weight = cols.next().and_then(|w| w.parse::<u32>().ok()).unwrap_or(1);
+                (word, pinyin.to_string(), weight)
+            } else {
+                let mut cols = trimmed.split_whitespace();
+                let (Some(word), Some(pinyin)) = (cols.next(), cols.next()) else {
+                    continue;
+                };
+                let weight = cols.next().and_then(|w| w.parse::<u32>().ok()).unwrap_or(1);
+                (word, pinyin.to_string(), weight)
             };
-            let weight = cols.next().and_then(|w| w.parse::<u32>().ok()).unwrap_or(1);
+            if word.is_empty() || pinyin.is_empty() {
+                continue;
+            }
             self.insert(word, pinyin, weight);
             added += 1;
         }
         added
+    }
+
+    /// Load a rime-ice-style dictionary file from `path`, merging its entries
+    /// into `self`. Returns the number of entries added. See [`load_text`] for
+    /// the accepted format (including rime YAML front-matter).
+    ///
+    /// [`load_text`]: Dictionary::load_text
+    pub fn load_file(&mut self, path: impl AsRef<Path>) -> io::Result<usize> {
+        let text = std::fs::read_to_string(path)?;
+        Ok(self.load_text(&text))
+    }
+
+    /// Build a dictionary from one or more rime-ice-style files, loaded in
+    /// order (later files add homophones/override nothing; weights coexist).
+    /// Fuzzy matching is on by default. Fails on the first unreadable file.
+    pub fn from_files<P: AsRef<Path>>(paths: impl IntoIterator<Item = P>) -> io::Result<Self> {
+        let mut dict = Dictionary::new();
+        for path in paths {
+            dict.load_file(path)?;
+        }
+        Ok(dict)
     }
 
     /// A compact, hand-tuned built-in dictionary. It is deliberately small but
@@ -245,6 +306,37 @@ mod tests {
         assert_eq!(added, 3); // 你好, 好, 世界 (last defaults weight 1)
         assert_eq!(dict.lookup("nihao")[0].word, "你好");
         assert_eq!(dict.lookup("shijie")[0].weight, 1);
+    }
+
+    #[test]
+    fn load_text_skips_rime_yaml_front_matter() {
+        let mut dict = Dictionary::new();
+        let added = dict.load_text(
+            "---\nname: test\nversion: \"1\"\n...\n你好\tni hao\t5000\n世界\tshi jie\t3000",
+        );
+        assert_eq!(added, 2);
+        // Space-separated syllables in the pinyin column are joined on insert.
+        assert_eq!(dict.lookup("nihao")[0].word, "你好");
+        assert_eq!(dict.lookup("shijie")[0].word, "世界");
+    }
+
+    #[test]
+    fn load_file_and_from_files_read_from_disk() {
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!("lingxi-ime-test-{}.dict", std::process::id()));
+        std::fs::write(&path, "阿\ta\t10\n爱\tai\t3000\n").expect("write temp dict");
+
+        let dict = Dictionary::from_files([&path]).expect("load temp dict");
+        assert_eq!(dict.lookup("ai")[0].word, "爱");
+        assert_eq!(dict.lookup("a")[0].word, "阿");
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn load_file_reports_missing_path_as_error() {
+        let mut dict = Dictionary::new();
+        assert!(dict.load_file("this/path/does/not/exist.dict").is_err());
     }
 
     #[test]

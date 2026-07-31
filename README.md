@@ -17,6 +17,7 @@ cross-app-assistant/
     ├── watch/               # Ctrl+Alt+Space 查看焦点控件和选区
     ├── demo/                # 端到端 变换 -> Diff -> 写回/撤销 演示
     ├── smoke/               # 自动创建 Win32 Edit 控件的原生集成冒烟
+    ├── ime-repl/            # 拼音输入法引擎的命令行/交互式 demo
     └── overlay/             # Tauri 浮窗（独立子项目，需 MSVC + WebView2）
 ```
 
@@ -66,7 +67,7 @@ cargo run --target x86_64-pc-windows-msvc
 ```
 
 - `segment`：把键流切成合法拼音音节，枚举全部合法切分（如 `xian` = 先 或 西安），并支持 `xi'an` 显式边界与"边打边出"的最长前缀兜底；
-- `dict::Dictionary`：词 ↔ 拼音 ↔ 词频，支持内置最小词库、rime-ice 风格 `词<TAB>拼音<TAB>权重` 文本加载、模糊音（`zh↔z`、`in↔ing`、`l↔n` 等）；
+- `dict::Dictionary`：词 ↔ 拼音 ↔ 词频，支持内置最小词库、rime-ice 风格 `词<TAB>拼音<TAB>权重` 文本加载（含 YAML 前言跳过、拼音列可含空格）、`load_file` / `from_files` 从磁盘加载、模糊音（`zh↔z`、`in↔ing`、`l↔n` 等）；
 - `engine::PinyinInputEngine`：对每种切分做基于对数词频的 Viterbi 句子搜索，叠加整词/前缀词/单字兜底，产出排序候选；
 - `rerank::CandidateReranker`：可插拔重排接口，内置 `FrequencyReranker`（词频基线）与 `PrefixContextReranker`（上下文启发式），**为未来神经重排（对 top-K 打分）预留同一接口**。
 
@@ -76,6 +77,31 @@ use assistant_ime::{InputEngine, InputContext, PinyinInputEngine};
 let engine = PinyinInputEngine::builtin();
 let cands = engine.candidates("nihao", &InputContext::with_limit(5));
 assert_eq!(cands[0].text, "你好");
+```
+
+### 命令行体验（ime-repl）
+
+无需真机、无需 GUI，直接在终端跑引擎：
+
+```powershell
+# 一次性模式：传入拼音打印候选
+cargo run -p ime-repl -- nihao woaizhongguo xian
+
+# 交互式 REPL：不带拼音参数，逐行输入
+cargo run -p ime-repl
+
+# 选项：--dict <文件>（可重复，加载 rime-ice 词库）、--limit N、--context <前文>、--no-fuzzy
+cargo run -p ime-repl -- --limit 5 --context 你好 shijie
+```
+
+输出示例：
+
+```text
+nihao:
+  1. 你好  [ni hao]  score=19.902
+  2. 你  [ni]  score=9.560
+woaizhongguo:
+  1. 我爱中国  [wo ai zhong guo]  score=40.345
 ```
 
 ## 构建与自动测试

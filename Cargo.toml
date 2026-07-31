@@ -8,6 +8,7 @@ members = [
     "apps/watch",
     "apps/demo",
     "apps/smoke",
+    "apps/ime-repl",
 ]
 # These two require the MSVC toolchain to *codegen* (the GNU-only environment
 # here lacks `dlltool.exe`, which candle's transitive deps and WebView2 need at

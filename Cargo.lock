@@ -31,6 +31,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "ime-repl"
+version = "0.1.0"
+dependencies = [
+ "assistant-ime",
+]
+
+[[package]]
 name = "probe"
 version = "0.1.0"
 dependencies = [

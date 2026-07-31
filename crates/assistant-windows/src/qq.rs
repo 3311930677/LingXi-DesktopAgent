@@ -377,7 +377,7 @@ mod tests {
     #[test]
     fn join_trailing_message_returns_long_single_node_as_is() {
         let long = "这是一条很长的消息".repeat(10);
-        let joined = join_trailing_message(&[long.clone()]).unwrap();
+        let joined = join_trailing_message(std::slice::from_ref(&long)).unwrap();
         assert_eq!(joined, long);
     }
 
