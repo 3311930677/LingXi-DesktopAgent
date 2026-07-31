@@ -10,6 +10,7 @@
 cross-app-assistant/
 ├── crates/
 │   ├── assistant-core/      # 平台无关：模型、InputAdapter、变换器、Diff、流程编排、Mock 测试
+│   ├── assistant-ime/       # 纯 Rust 拼音输入法引擎：音节切分、词典候选生成、可插拔重排
 │   └── assistant-windows/   # UIA、Win32、剪贴板、键盘、快照、写回与撤销
 └── apps/
     ├── probe/               # 倒计时后探测焦点控件
@@ -54,6 +55,28 @@ cargo run --target x86_64-pc-windows-msvc
 - `upper`：转大写
 
 `transform_selection` 会产出字符级 LCS Diff（`DiffOp` 序列），可内联渲染为 `[-删除-][+新增+]` 并统计增删字符数，供界面或控制台预览。
+
+## 拼音输入法引擎（assistant-ime）
+
+`assistant-ime` 是真正 IME 的核心——把裸拼音键流变成有序中文候选，**纯 Rust、零 C 依赖**，随 workspace 在 GNU 工具链下编译并单元测试（无需真机、无需 librime/ICU）。分层与 librime 对齐，未来可用 librime+rime-ice 在同一 `InputEngine` trait 后替换内部实现：
+
+```text
+裸拼音 ─▶ 音节切分 ─▶ 候选生成(Viterbi 最短路径) ─▶ 上下文重排 ─▶ 候选
+"nihao"   [ni][hao]     你好 / 你+好 …               避免重复/覆盖加权
+```
+
+- `segment`：把键流切成合法拼音音节，枚举全部合法切分（如 `xian` = 先 或 西安），并支持 `xi'an` 显式边界与"边打边出"的最长前缀兜底；
+- `dict::Dictionary`：词 ↔ 拼音 ↔ 词频，支持内置最小词库、rime-ice 风格 `词<TAB>拼音<TAB>权重` 文本加载、模糊音（`zh↔z`、`in↔ing`、`l↔n` 等）；
+- `engine::PinyinInputEngine`：对每种切分做基于对数词频的 Viterbi 句子搜索，叠加整词/前缀词/单字兜底，产出排序候选；
+- `rerank::CandidateReranker`：可插拔重排接口，内置 `FrequencyReranker`（词频基线）与 `PrefixContextReranker`（上下文启发式），**为未来神经重排（对 top-K 打分）预留同一接口**。
+
+```rust
+use assistant_ime::{InputEngine, InputContext, PinyinInputEngine};
+
+let engine = PinyinInputEngine::builtin();
+let cands = engine.candidates("nihao", &InputContext::with_limit(5));
+assert_eq!(cands[0].text, "你好");
+```
 
 ## 构建与自动测试
 

@@ -10,6 +10,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "assistant-ime"
+version = "0.1.0"
+
+[[package]]
 name = "assistant-windows"
 version = "0.1.0"
 dependencies = [

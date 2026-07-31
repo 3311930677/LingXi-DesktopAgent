@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/assistant-core",
+    "crates/assistant-ime",
     "crates/assistant-windows",
     "apps/probe",
     "apps/watch",
