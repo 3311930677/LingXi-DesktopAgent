@@ -80,22 +80,29 @@ impl Dictionary {
 
     /// Exact lookup of all words whose pinyin key equals `key` (already
     /// syllable-joined), best-weighted first. With fuzzy on, keys that differ
-    /// only by a tolerated equivalence also match.
+    /// only by a tolerated equivalence also match but with a reduced weight so
+    /// they never outrank an exact hit.
     pub fn lookup(&self, key: &str) -> Vec<&DictionaryEntry> {
         let key = normalize_key(key);
         let mut out: Vec<&DictionaryEntry> = Vec::new();
         if let Some(bucket) = self.by_pinyin.get(&key) {
             out.extend(bucket.iter());
         }
-        if self.fuzzy {
-            let canon = fuzzy_canon(&key);
-            for (candidate, bucket) in &self.by_pinyin {
-                if candidate == &key {
-                    continue;
-                }
-                if fuzzy_canon(candidate) == canon {
-                    out.extend(bucket.iter());
-                }
+        // If we have exact hits, skip fuzzy entirely — the exact results are
+        // always correct and much faster (no full-table scan).
+        if !out.is_empty() || !self.fuzzy {
+            out.sort_by(|a, b| b.weight.cmp(&a.weight).then_with(|| a.word.cmp(&b.word)));
+            out.dedup_by(|a, b| a.word == b.word && a.pinyin == b.pinyin);
+            return out;
+        }
+        // Fuzzy fallback: only when exact match found nothing.
+        let canon = fuzzy_canon(&key);
+        for (candidate, bucket) in &self.by_pinyin {
+            if candidate == &key {
+                continue;
+            }
+            if fuzzy_canon(candidate) == canon {
+                out.extend(bucket.iter());
             }
         }
         out.sort_by(|a, b| b.weight.cmp(&a.weight).then_with(|| a.word.cmp(&b.word)));

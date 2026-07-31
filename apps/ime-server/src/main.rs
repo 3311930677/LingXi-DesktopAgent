@@ -31,8 +31,6 @@ use assistant_ime::{
     PrefixContextReranker,
 };
 
-const BIND_ADDR: &str = "127.0.0.1:9527";
-
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 enum Request {
