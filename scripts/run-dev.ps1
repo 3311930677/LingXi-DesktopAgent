@@ -49,9 +49,14 @@ if (-not (Test-ImePort)) {
 }
 
 # Verify that the process on 9527 is actually serving the large dictionary.
-& (Join-Path $PSScriptRoot "test-ime.ps1")
-if ($LASTEXITCODE -ne 0) {
-    throw "IME self-test failed. Stop any old ime-server and run this script again."
+# Run the checker in a child PowerShell process so `$LASTEXITCODE` represents
+# this test command itself. Invoking the .ps1 directly would retain a stale exit
+# code from an earlier native command even when every candidate check passed.
+$TestScript = Join-Path $PSScriptRoot "test-ime.ps1"
+& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $TestScript
+$TestExitCode = $LASTEXITCODE
+if ($TestExitCode -ne 0) {
+    throw "IME self-test failed (exit code $TestExitCode). Stop any old ime-server and run this script again."
 }
 
 $overlayCommand = "Set-Location -LiteralPath '$OverlayDir'; cargo run"
