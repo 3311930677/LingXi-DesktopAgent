@@ -39,6 +39,7 @@ use windows::Win32::Graphics::Gdi::{
     GetMonitorInfoW, MonitorFromPoint, MONITORINFO, MONITOR_DEFAULTTONEAREST,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture;
+use windows::Win32::UI::Input::Ime::ImmAssociateContextEx;
 use windows::Win32::UI::WindowsAndMessaging::{
     GetCursorPos, GetWindowLongPtrW, SendMessageW, SetWindowLongPtrW, GWL_EXSTYLE,
     HTBOTTOMRIGHT, WM_NCLBUTTONDOWN, WS_EX_NOACTIVATE,
@@ -865,6 +866,14 @@ fn on_ime(app: &AppHandle) {
         position_overlay(&ime_win);
         let _ = ime_win.show();
         let _ = ime_win.set_focus();
+        // Disable the system IME on this window so raw letter keys reach our
+        // pinyin input field instead of being intercepted by the OS IME.
+        if let Ok(hwnd) = ime_win.hwnd() {
+            unsafe {
+                // IACE_DEFAULT (0x0010) with null context disables IME for the window.
+                let _ = ImmAssociateContextEx(HWND(hwnd.0), None, 0x0010);
+            }
+        }
     }
 }
 
