@@ -751,15 +751,22 @@ struct ImeCandidateView {
     score: f64,
 }
 
-/// Return ranked candidates for a raw pinyin string (called by the IME panel as
-/// the user types). The engine is lightweight and returns in microseconds.
+/// Return ranked candidates for a raw pinyin string. Tries the ime-server (TCP
+/// 127.0.0.1:9527) first for large-dictionary results; falls back to the
+/// built-in engine if the server is not running.
 #[tauri::command]
 fn ime_candidates(pinyin: String, context: String, limit: Option<usize>) -> Vec<ImeCandidateView> {
+    let limit = limit.unwrap_or(9);
+    // Try TCP call to ime-server.
+    if let Some(results) = ipc_query(&pinyin, &context, limit) {
+        return results;
+    }
+    // Fallback: use built-in engine directly.
     use assistant_ime::{InputContext, InputEngine, PinyinInputEngine};
     let engine = PinyinInputEngine::builtin();
     let ctx = InputContext {
         preceding_text: context,
-        max_candidates: limit.unwrap_or(9),
+        max_candidates: limit,
     };
     engine
         .candidates(&pinyin, &ctx)
@@ -770,6 +777,49 @@ fn ime_candidates(pinyin: String, context: String, limit: Option<usize>) -> Vec<
             score: c.score,
         })
         .collect()
+}
+
+/// TCP call to the ime-server. Returns None on connection failure (server not
+/// running) so the caller can fall back gracefully.
+fn ipc_query(pinyin: &str, context: &str, limit: usize) -> Option<Vec<ImeCandidateView>> {
+    use std::io::{BufRead, BufReader, Write};
+    use std::net::TcpStream;
+    use std::time::Duration;
+
+    let mut stream = TcpStream::connect_timeout(
+        &"127.0.0.1:9527".parse().unwrap(),
+        Duration::from_millis(100),
+    )
+    .ok()?;
+    stream.set_read_timeout(Some(Duration::from_millis(500))).ok()?;
+
+    let request = format!(
+        "{{\"type\":\"query\",\"pinyin\":\"{}\",\"context\":\"{}\",\"limit\":{}}}\n",
+        pinyin.replace('\\', "\\\\").replace('"', "\\\""),
+        context.replace('\\', "\\\\").replace('"', "\\\""),
+        limit
+    );
+    stream.write_all(request.as_bytes()).ok()?;
+    stream.flush().ok()?;
+
+    let mut reader = BufReader::new(&stream);
+    let mut line = String::new();
+    reader.read_line(&mut line).ok()?;
+
+    // Parse the response: {"candidates":[{"text":"...","score":...}, ...]}
+    let value: serde_json::Value = serde_json::from_str(line.trim()).ok()?;
+    let arr = value.get("candidates")?.as_array()?;
+    let results = arr
+        .iter()
+        .filter_map(|item| {
+            Some(ImeCandidateView {
+                text: item.get("text")?.as_str()?.to_string(),
+                syllables: String::new(),
+                score: item.get("score")?.as_f64().unwrap_or(0.0),
+            })
+        })
+        .collect();
+    Some(results)
 }
 
 /// Commit a chosen candidate: write it into the target application via the

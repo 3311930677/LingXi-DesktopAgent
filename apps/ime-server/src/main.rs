@@ -150,15 +150,65 @@ fn handle_connection(engine: &PinyinInputEngine, stream: TcpStream) {
 }
 
 fn main() {
-    let engine = PinyinInputEngine::builtin();
-    let listener = TcpListener::bind(BIND_ADDR).unwrap_or_else(|e| {
-        eprintln!("ime-server: cannot bind {BIND_ADDR}: {e}");
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut dict_files: Vec<String> = Vec::new();
+    let mut port = 9527u16;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--dict" => {
+                i += 1;
+                if i < args.len() {
+                    dict_files.push(args[i].clone());
+                }
+            }
+            "--port" => {
+                i += 1;
+                if i < args.len() {
+                    port = args[i].parse().unwrap_or(9527);
+                }
+            }
+            "-h" | "--help" => {
+                println!("Usage: ime-server [--dict <FILE>]... [--port <PORT>]");
+                println!("  --dict <FILE>  Load a rime-ice-style dictionary (repeatable)");
+                println!("  --port <PORT>  TCP port (default 9527)");
+                return;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+
+    let engine = if dict_files.is_empty() {
+        PinyinInputEngine::builtin()
+    } else {
+        use assistant_ime::{Dictionary, PrefixContextReranker};
+        let mut dict = Dictionary::new();
+        let mut total = 0;
+        for path in &dict_files {
+            match dict.load_file(path) {
+                Ok(n) => {
+                    println!("  loaded {n} entries from {path}");
+                    total += n;
+                }
+                Err(e) => {
+                    eprintln!("  warning: cannot load {path}: {e}");
+                }
+            }
+        }
+        println!("  total: {total} dictionary entries");
+        PinyinInputEngine::new(dict, Box::new(PrefixContextReranker::default()))
+    };
+
+    let bind = format!("127.0.0.1:{port}");
+    let listener = TcpListener::bind(&bind).unwrap_or_else(|e| {
+        eprintln!("ime-server: cannot bind {bind}: {e}");
         std::process::exit(1);
     });
     println!("LingXi IME Server");
-    println!("  Listening: {BIND_ADDR}");
+    println!("  Listening: {bind}");
     println!("  Protocol: one JSON line in → one JSON line out (per connection)");
-    println!("  Test: echo '{{\"type\":\"query\",\"pinyin\":\"nihao\"}}' | nc 127.0.0.1 9527");
+    println!("  Test: echo '{{\"type\":\"query\",\"pinyin\":\"nihao\"}}' | nc 127.0.0.1 {port}");
     println!("  Press Ctrl+C to stop.\n");
 
     for stream in listener.incoming() {
