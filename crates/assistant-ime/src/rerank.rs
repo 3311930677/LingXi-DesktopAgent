@@ -123,10 +123,7 @@ mod tests {
 
     #[test]
     fn prefix_context_penalizes_immediate_repetition() {
-        let mut cs = vec![
-            cand("妈", &["ma"], 1000.0),
-            cand("吗", &["ma"], 990.0),
-        ];
+        let mut cs = vec![cand("妈", &["ma"], 1000.0), cand("吗", &["ma"], 990.0)];
         let ctx = InputContext {
             preceding_text: "妈".to_string(),
             max_candidates: 0,

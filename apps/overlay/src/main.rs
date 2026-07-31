@@ -25,9 +25,7 @@ use std::time::Duration;
 use assistant_core::{
     diff_chars, transformer_by_name, DiffOp, InputAdapter, SelectionSnapshot, WriteReceipt,
 };
-use assistant_inference::{
-    CloudBackend, CloudConfig, LocalBackend, ModelBackend, ModelTask,
-};
+use assistant_inference::{CloudBackend, CloudConfig, LocalBackend, ModelBackend, ModelTask};
 use assistant_windows::{
     insert_text_at_caret, qq_latest_message, qq_write_draft, remember_foreground_if_qq,
     run_assistant_hotkey_loop, wait_for_trigger_release, AssistantHotkey, WindowsAdapter,
@@ -39,12 +37,12 @@ use windows::Win32::Graphics::Gdi::{
     GetMonitorInfoW, MonitorFromPoint, MONITORINFO, MONITOR_DEFAULTTONEAREST,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetAsyncKeyState, ReleaseCapture, VK_BACK, VK_CONTROL, VK_ESCAPE, VK_LWIN, VK_MENU,
-    VK_RETURN, VK_RWIN, VK_SPACE,
+    GetAsyncKeyState, ReleaseCapture, VK_BACK, VK_CONTROL, VK_ESCAPE, VK_LWIN, VK_MENU, VK_RETURN,
+    VK_RWIN, VK_SPACE,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetCursorPos, GetWindowLongPtrW, SendMessageW, SetWindowLongPtrW, GWL_EXSTYLE,
-    HTBOTTOMRIGHT, WM_NCLBUTTONDOWN, WS_EX_NOACTIVATE,
+    GetCursorPos, GetWindowLongPtrW, SendMessageW, SetWindowLongPtrW, GWL_EXSTYLE, HTBOTTOMRIGHT,
+    WM_NCLBUTTONDOWN, WS_EX_NOACTIVATE,
 };
 
 /// A preview result cached so "apply" can reuse it instead of running the model
@@ -175,7 +173,10 @@ fn model_task(mode: &str) -> Option<ModelTask> {
 }
 
 fn backend_signature(settings: &BackendSettings) -> String {
-    format!("{}|{}|{}", settings.backend, settings.endpoint, settings.model)
+    format!(
+        "{}|{}|{}",
+        settings.backend, settings.endpoint, settings.model
+    )
 }
 
 fn run_model(settings: &BackendSettings, task: ModelTask, input: &str) -> Result<String, String> {
@@ -749,8 +750,8 @@ fn set_panel_focusable(app: AppHandle, focusable: bool) -> Result<(), String> {
 
 use std::sync::Arc;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, SetWindowsHookExW, UnhookWindowsHookEx, GetMessageW as GetMsg,
-    KBDLLHOOKSTRUCT, MSG, WH_KEYBOARD_LL, HC_ACTION,
+    CallNextHookEx, GetMessageW as GetMsg, SetWindowsHookExW, UnhookWindowsHookEx, HC_ACTION,
+    KBDLLHOOKSTRUCT, MSG, WH_KEYBOARD_LL,
 };
 
 /// Shared IME state between the hook thread, Tauri commands, and the frontend.
@@ -759,6 +760,8 @@ struct ImeStateView {
     active: bool,
     pinyin: String,
     candidates: Vec<ImeCandidateView>,
+    /// `large` when connected to ime-server+rime-ice, `basic` on fallback.
+    backend: &'static str,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -781,6 +784,8 @@ struct ImeShared {
     /// Selection pressed before the async candidate response arrived. The
     /// worker applies it as soon as the matching revision is published.
     pending_selection: Option<usize>,
+    /// Whether the last candidate query came from ime-server+rime-ice.
+    server_connected: bool,
 }
 
 impl Default for ImeShared {
@@ -795,6 +800,7 @@ impl Default for ImeShared {
             revision: 0,
             pending_commit: None,
             pending_selection: None,
+            server_connected: false,
         }
     }
 }
@@ -813,6 +819,7 @@ fn ime_state() -> ImeStateView {
         active: s.active,
         pinyin: s.pinyin.clone(),
         candidates: s.candidates.clone(),
+        backend: if s.server_connected { "large" } else { "basic" },
     }
 }
 
@@ -852,9 +859,9 @@ fn ime_toggle() -> bool {
 
 /// Compute candidates outside the keyboard hook. The caller publishes the
 /// result only when the pinyin revision is still current.
-fn compute_candidates(pinyin: &str, context: &str) -> Vec<ImeCandidateView> {
+fn compute_candidates(pinyin: &str, context: &str) -> (Vec<ImeCandidateView>, bool) {
     if let Some(results) = ipc_query(pinyin, context, 9) {
-        return results;
+        return (results, true);
     }
     use assistant_ime::{InputContext, InputEngine, PinyinInputEngine};
     let engine = PinyinInputEngine::builtin();
@@ -862,14 +869,15 @@ fn compute_candidates(pinyin: &str, context: &str) -> Vec<ImeCandidateView> {
         preceding_text: context.to_string(),
         max_candidates: 9,
     };
-    engine
+    let candidates = engine
         .candidates(pinyin, &ctx)
         .into_iter()
         .map(|candidate| ImeCandidateView {
             text: candidate.text,
             score: candidate.score,
         })
-        .collect()
+        .collect();
+    (candidates, false)
 }
 
 /// TCP call to the ime-server.
@@ -882,7 +890,9 @@ fn ipc_query(pinyin: &str, context: &str, limit: usize) -> Option<Vec<ImeCandida
         std::time::Duration::from_millis(100),
     )
     .ok()?;
-    stream.set_read_timeout(Some(std::time::Duration::from_millis(500))).ok()?;
+    stream
+        .set_read_timeout(Some(std::time::Duration::from_millis(500)))
+        .ok()?;
 
     let request = format!(
         "{{\"type\":\"query\",\"pinyin\":\"{}\",\"context\":\"{}\",\"limit\":{}}}\n",
@@ -961,11 +971,12 @@ fn spawn_ime_worker(app: AppHandle) {
                 }
                 seen_revision = revision;
             } else if revision != seen_revision {
-                let candidates = compute_candidates(&pinyin, &context);
+                let (candidates, server_connected) = compute_candidates(&pinyin, &context);
                 let mut s = shared.lock().unwrap();
                 // Discard a stale server response if another key arrived.
                 if s.active && s.revision == revision && s.pinyin == pinyin {
                     s.candidates = candidates;
+                    s.server_connected = server_connected;
                     let queued = if let Some(index) = s.pending_selection.take() {
                         queue_candidate(&mut s, index);
                         s.pending_commit.is_some()
@@ -998,9 +1009,8 @@ fn position_ime_window(window: &WebviewWindow) {
         ..Default::default()
     };
     let mut point = POINT::default();
-    let caret_found = unsafe { GetGUIThreadInfo(0, &mut info) }.is_ok()
-        && !info.hwndCaret.is_invalid()
-        && {
+    let caret_found =
+        unsafe { GetGUIThreadInfo(0, &mut info) }.is_ok() && !info.hwndCaret.is_invalid() && {
             point.x = info.rcCaret.left;
             point.y = info.rcCaret.bottom;
             unsafe { ClientToScreen(info.hwndCaret, &mut point) }.as_bool()

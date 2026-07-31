@@ -116,8 +116,22 @@ body { padding: 7px; }
   width: 5px;
   height: 5px;
   border-radius: 50%;
+}
+
+.status.large .status-dot {
   background: #79e4ba;
   box-shadow: 0 0 7px rgba(121, 228, 186, 0.8);
+}
+
+.status.basic {
+  color: rgba(255, 211, 153, 0.82);
+  border-color: rgba(255, 185, 105, 0.18);
+  background: rgba(255, 166, 80, 0.08);
+}
+
+.status.basic .status-dot {
+  background: #ffb66b;
+  box-shadow: 0 0 7px rgba(255, 174, 91, 0.72);
 }
 
 .bottomline {

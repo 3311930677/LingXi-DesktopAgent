@@ -262,7 +262,13 @@ mod tests {
     fn limit_is_respected() {
         let engine = PinyinInputEngine::builtin();
         let req = Request::Rerank {
-            candidates: vec!["一".into(), "二".into(), "三".into(), "四".into(), "五".into()],
+            candidates: vec![
+                "一".into(),
+                "二".into(),
+                "三".into(),
+                "四".into(),
+                "五".into(),
+            ],
             context: String::new(),
             limit: 2,
         };

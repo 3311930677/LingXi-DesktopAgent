@@ -20,7 +20,9 @@
 use std::io::{self, Write};
 use std::process::ExitCode;
 
-use assistant_ime::{Dictionary, InputContext, InputEngine, PinyinInputEngine, PrefixContextReranker};
+use assistant_ime::{
+    Dictionary, InputContext, InputEngine, PinyinInputEngine, PrefixContextReranker,
+};
 
 struct Options {
     dict_files: Vec<String>,

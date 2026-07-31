@@ -259,7 +259,10 @@ fn fuzzy_canon(key: &str) -> String {
     // Retroflex → dental initials.
     s = s.replace("zh", "z").replace("ch", "c").replace("sh", "s");
     // Nasal finals.
-    s = s.replace("ing", "in").replace("eng", "en").replace("ang", "an");
+    s = s
+        .replace("ing", "in")
+        .replace("eng", "en")
+        .replace("ang", "an");
     // l/n initial confusion and ü spelling.
     s = s.replace('l', "n").replace('v', "u");
     s

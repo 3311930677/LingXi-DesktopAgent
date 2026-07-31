@@ -7,8 +7,8 @@ use std::time::{Duration, Instant};
 use assistant_core::AdapterError;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP,
-    KEYEVENTF_UNICODE, VIRTUAL_KEY, VK_C, VK_CONTROL, VK_DELETE, VK_LCONTROL, VK_LMENU, VK_LSHIFT,
-    VK_A, VK_LWIN, VK_MENU, VK_RCONTROL, VK_RMENU, VK_RSHIFT, VK_RWIN, VK_SHIFT, VK_V, VK_Z,
+    KEYEVENTF_UNICODE, VIRTUAL_KEY, VK_A, VK_C, VK_CONTROL, VK_DELETE, VK_LCONTROL, VK_LMENU,
+    VK_LSHIFT, VK_LWIN, VK_MENU, VK_RCONTROL, VK_RMENU, VK_RSHIFT, VK_RWIN, VK_SHIFT, VK_V, VK_Z,
 };
 
 /// Modifier keys that could still be physically held when a hotkey fires and

@@ -390,9 +390,7 @@ mod tests {
     #[test]
     fn empty_input_yields_no_candidates() {
         let engine = PinyinInputEngine::builtin();
-        assert!(engine
-            .candidates("", &InputContext::default())
-            .is_empty());
+        assert!(engine.candidates("", &InputContext::default()).is_empty());
     }
 
     #[test]

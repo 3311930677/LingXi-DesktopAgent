@@ -8,8 +8,11 @@ const { invoke } = window.__TAURI__
 
 const pinyinEl = document.getElementById('pinyin-display');
 const candidatesEl = document.getElementById('candidates');
+const backendStatusEl = document.getElementById('backend-status');
+const backendLabelEl = document.getElementById('backend-label');
 
 let lastPinyin = '';
+let lastBackend = '';
 
 async function poll() {
   try {
@@ -17,6 +20,12 @@ async function poll() {
     if (!state.active && lastPinyin === '' && candidatesEl.children.length === 0) {
       requestAnimationFrame(schedulePoll);
       return;
+    }
+    if (state.backend !== lastBackend) {
+      lastBackend = state.backend;
+      const large = state.backend === 'large';
+      backendStatusEl.className = `status ${large ? 'large' : 'basic'}`;
+      backendLabelEl.textContent = large ? '大词库' : '基础词库';
     }
     if (state.pinyin !== lastPinyin || candidatesEl.children.length !== state.candidates.length) {
       lastPinyin = state.pinyin;
@@ -65,7 +74,7 @@ schedulePoll();
 // Mock for browser preview
 function mockInvoke(cmd) {
   if (cmd === 'ime_state') {
-    return Promise.resolve({ active: true, pinyin: 'nihao', candidates: [
+    return Promise.resolve({ active: true, backend: 'large', pinyin: 'nihao', candidates: [
       { text: '你好', score: 19.9 }, { text: '你', score: 9.5 }
     ]});
   }

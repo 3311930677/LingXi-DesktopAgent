@@ -2,7 +2,24 @@
 
 端侧大模型跨应用智能输入辅助系统的 Windows/Rust 核心。
 
-当前里程碑：**W0-W5 完成，W7 核心（可插拔变换器 + Diff 引擎）已就绪**。已具备 UIA 能力探测、全局快捷键、三级读取、安全快照校验、跨应用写回、写后验证、撤销，以及平台无关的变换器抽象与字符级 Diff。端侧模型与 Tauri 图形界面为后续。
+当前已具备跨应用读写、端侧/云端文本变换、拼音候选引擎、rime-ice 大词库服务、全局键盘钩子和跟随光标的候选窗。
+
+## 快速开始
+
+Windows 开发机完成 Rust GNU/MSVC、Visual Studio Build Tools 和 WebView2 配置后，在项目根目录运行：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\run-dev.ps1
+```
+
+该脚本会自动准备/复用项目同级的 rime-ice，启动大词库 `ime-server`，执行 `nihao`、`suoyi`、`dang` 等候选自测，然后启动 overlay。IME 模式默认开启，无需先按快捷键。
+
+候选窗右上角状态非常重要：
+
+- **大词库（绿色）**：已连接 rime-ice，常用字词完整；
+- **基础词库（橙色）**：`ime-server` 未连接，只有内置最小词库，`dang` 等词可能缺失。此时停止旧进程并重新运行上述一键脚本。
+
+参与开发请阅读 [`CONTRIBUTING.md`](CONTRIBUTING.md)。
 
 ## 目录结构
 
@@ -18,7 +35,10 @@ cross-app-assistant/
     ├── demo/                # 端到端 变换 -> Diff -> 写回/撤销 演示
     ├── smoke/               # 自动创建 Win32 Edit 控件的原生集成冒烟
     ├── ime-repl/            # 拼音输入法引擎的命令行/交互式 demo
-    └── overlay/             # Tauri 浮窗（独立子项目，需 MSVC + WebView2）
+    ├── ime-server/          # rime-ice 大词库与候选重排 TCP 服务
+    └── overlay/             # Tauri 桌面 Agent + 全局输入法候选窗（MSVC）
+├── scripts/                 # 词库准备、一键启动、候选自测
+└── CONTRIBUTING.md          # 共创环境与 Git/PR 流程
 ```
 
 ## 浮窗（Tauri overlay）
@@ -39,12 +59,11 @@ node apps/overlay/ui/preview-server.cjs   # 启动后打开 http://localhost:877
 
 ### 编译成桌面浮窗（前置：MSVC）
 
-Tauri 在 Windows 上需要 **MSVC 工具链 + WebView2 Runtime**，当前环境只有 GNU 工具链，因此 overlay 被 workspace `exclude`，不影响其余 crate 构建。安装 Visual Studio Build Tools（含 “使用 C++ 的桌面开发”）并添加 MSVC target 后：
+Tauri 在 Windows 上需要 **MSVC 工具链 + WebView2 Runtime**。overlay 被根 workspace `exclude`，并由 `apps/overlay/rust-toolchain.toml` 固定使用 MSVC；根 workspace 仍可独立使用 GNU。安装 Visual Studio Build Tools（含“使用 C++ 的桌面开发”）后：
 
 ```powershell
-rustup target add x86_64-pc-windows-msvc
 cd apps/overlay
-cargo run --target x86_64-pc-windows-msvc
+cargo run
 ```
 
 ## 变换器与 Diff

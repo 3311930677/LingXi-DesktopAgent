@@ -152,9 +152,8 @@ pub fn qq_write_draft(draft: &str) -> Result<bool, AdapterError> {
 
     // SAFETY: this is an enabled, keyboard-focusable Edit element in the
     // foreground QQ window. Focusing does not activate any other application.
-    unsafe { editor.SetFocus() }.map_err(|error| {
-        AdapterError::Platform(format!("QQ editor SetFocus failed: {error}"))
-    })?;
+    unsafe { editor.SetFocus() }
+        .map_err(|error| AdapterError::Platform(format!("QQ editor SetFocus failed: {error}")))?;
     sleep(Duration::from_millis(80));
 
     if let Some(value) = get_pattern::<IUIAutomationValuePattern>(&editor, UIA_ValuePatternId) {
@@ -264,7 +263,8 @@ fn is_message_candidate(text: &str, window_title: &str) -> bool {
     }
     // UI labels are usually one or two characters. Keeping at least one
     // alphanumeric/CJK character avoids punctuation-only timestamp separators.
-    text.chars().any(|ch| ch.is_alphanumeric() || ('\u{4e00}'..='\u{9fff}').contains(&ch))
+    text.chars()
+        .any(|ch| ch.is_alphanumeric() || ('\u{4e00}'..='\u{9fff}').contains(&ch))
 }
 
 fn choose_editor(elements: Vec<IUIAutomationElement>) -> Option<IUIAutomationElement> {
@@ -328,8 +328,9 @@ fn choose_editor(elements: Vec<IUIAutomationElement>) -> Option<IUIAutomationEle
 /// at zero so a strongly-search-flavored field cannot outrank an unlabeled but
 /// otherwise valid composer.
 fn editor_score(descriptor: &str) -> i32 {
-    const COMPOSER_KEYWORDS: [&str; 7] =
-        ["input", "editor", "compose", "message", "chat", "输入", "消息"];
+    const COMPOSER_KEYWORDS: [&str; 7] = [
+        "input", "editor", "compose", "message", "chat", "输入", "消息",
+    ];
     const SEARCH_KEYWORDS: [&str; 3] = ["search", "搜索", "查找"];
 
     let positive = COMPOSER_KEYWORDS
