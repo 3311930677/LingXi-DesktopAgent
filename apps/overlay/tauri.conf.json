@@ -1,0 +1,56 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "LingXi Overlay",
+  "version": "0.1.0",
+  "identifier": "com.crossapp.lingxi",
+  "build": {
+    "frontendDist": "ui"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "label": "main",
+        "title": "灵犀",
+        "width": 520,
+        "height": 520,
+        "minWidth": 400,
+        "minHeight": 360,
+        "maxWidth": 1100,
+        "maxHeight": 900,
+        "resizable": true,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "visible": false,
+        "focus": false,
+        "shadow": false,
+        "center": true
+      },
+      {
+        "label": "pet",
+        "title": "灵犀桌宠",
+        "url": "pet.html",
+        "width": 220,
+        "height": 260,
+        "resizable": false,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "visible": true,
+        "focus": false,
+        "shadow": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": false,
+    "targets": "all",
+    "icon": ["icons/icon.ico"]
+  }
+}

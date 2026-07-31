@@ -1,0 +1,25 @@
+# Rust build artifacts (root workspace + any nested target dirs, e.g. apps/overlay)
+/target
+**/target/
+**/*.rs.bk
+
+# Toolchain installers
+rustup-init.exe
+
+# Local temporary verification / build outputs
+*-check.out
+*-check.err
+*-clippy-out.txt
+*-test-out.txt
+run-*-clippy.bat
+run-*-tests.bat
+
+# Environment / installer logs
+vcenv.txt
+vs-install.log
+vs-install.log.err
+*.log
+
+# OS / editor cruft
+Thumbs.db
+.DS_Store

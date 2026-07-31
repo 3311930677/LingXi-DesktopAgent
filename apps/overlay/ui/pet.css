@@ -1,0 +1,75 @@
+:root {
+  font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+}
+* { box-sizing: border-box; }
+html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: transparent; user-select: none; }
+body { display: grid; place-items: end center; padding: 8px; }
+.pet {
+  position: relative;
+  width: 204px;
+  height: 244px;
+  padding: 0;
+  color: #eef1ff;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  cursor: grab;
+  filter: drop-shadow(0 12px 12px rgba(0, 0, 0, .32));
+  animation: float 3s ease-in-out infinite;
+}
+.pet:active { cursor: grabbing; }
+.avatar {
+  position: absolute;
+  z-index: 2;
+  left: 2px;
+  right: 2px;
+  bottom: 0;
+  width: 200px;
+  height: 202px;
+  object-fit: contain;
+  object-position: center bottom;
+  pointer-events: none;
+  transition: opacity .16s ease, transform .2s ease;
+}
+.halo {
+  position: absolute;
+  z-index: 1;
+  left: 20px;
+  top: 42px;
+  width: 164px;
+  height: 164px;
+  border: 2px solid rgba(124, 140, 255, .5);
+  border-radius: 50%;
+  box-shadow: inset 0 0 22px rgba(87, 224, 200, .17), 0 0 22px rgba(124, 140, 255, .28);
+  animation: halo 3s ease-in-out infinite;
+}
+.bubble {
+  position: absolute;
+  z-index: 5;
+  left: 50%;
+  top: 0;
+  min-width: 48px;
+  max-width: 184px;
+  padding: 5px 11px;
+  overflow: hidden;
+  color: #e9edff;
+  font-size: 11px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  background: rgba(20, 23, 39, .84);
+  border: 1px solid rgba(255, 255, 255, .15);
+  border-radius: 999px;
+  transform: translateX(-50%);
+  backdrop-filter: blur(10px);
+}
+.pet.thinking .halo { animation: spin 1.2s linear infinite; border-color: #f0c040; }
+.pet.thinking .bubble { color: #f0c040; }
+.pet.speaking .avatar { animation: talk .48s ease-in-out infinite; }
+.pet.alert { animation: alert .65s ease-in-out 3; }
+.pet.alert .halo { border-color: rgba(111, 240, 182, .75); box-shadow: 0 0 26px rgba(111, 240, 182, .4); }
+.pet.alert .bubble { color: #6ff0b6; border-color: rgba(111, 240, 182, .5); }
+@keyframes float { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-5px); } }
+@keyframes halo { 0%,100% { transform: scale(.95); opacity: .65; } 50% { transform: scale(1.05); opacity: 1; } }
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes talk { 50% { transform: translateY(-3px) scale(1.025); } }
+@keyframes alert { 25% { transform: translateX(-5px) rotate(-2deg); } 75% { transform: translateX(5px) rotate(2deg); } }

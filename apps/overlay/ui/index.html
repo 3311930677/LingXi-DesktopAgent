@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>灵犀 · 跨应用改写</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <!-- Backdrop only exists in the browser preview; the Tauri window is
+         transparent so the card floats directly over the desktop. -->
+    <div class="preview-backdrop"></div>
+
+    <main class="card" id="card" role="dialog" aria-label="改写建议">
+      <header class="titlebar" id="titlebar">
+        <div class="brand">
+          <span class="logo" aria-hidden="true"></span>
+          <span class="brand-name">灵犀</span>
+          <span class="brand-sub">跨应用改写</span>
+        </div>
+        <div class="win-actions">
+          <button class="icon-btn" id="pin-btn" title="置顶" aria-label="置顶">
+            <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M14 4v6l3 3v2h-5v5l-1 1-1-1v-5H5v-2l3-3V4H7V2h10v2z"/></svg>
+          </button>
+          <button class="icon-btn" id="close-btn" title="关闭 (Esc)" aria-label="关闭">
+            <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M18.3 5.7 12 12l6.3 6.3-1.4 1.4L10.6 13.4 4.3 19.7 2.9 18.3 9.2 12 2.9 5.7 4.3 4.3l6.3 6.3 6.3-6.3z"/></svg>
+          </button>
+        </div>
+      </header>
+
+      <nav class="modes" id="modes" aria-label="改写模式">
+        <button class="chip is-active" data-mode="polish" title="保留全部原意，按原文场景丰富并提升表达">润色</button>
+        <button class="chip" data-mode="proofread" title="只修正错别字、标点和语法">纠错</button>
+        <button class="chip featured" data-mode="prompt-enhance" title="补全角色、目标、约束、输出格式与示例">提示词增强</button>
+      </nav>
+
+      <section class="tools-row">
+        <button class="tool-tab is-active" id="rewrite-tab">改写</button>
+        <button class="tool-tab" id="qq-tab">QQ 草稿</button>
+        <button class="tool-tab" id="settings-btn">模型设置</button>
+        <span class="backend-badge" id="backend-badge">本地</span>
+      </section>
+
+      <section class="diff-wrap" id="rewrite-view">
+        <div class="diff-head">
+          <span class="diff-title">改动预览</span>
+          <span class="stat" id="stat">
+            <span class="add" id="stat-add">+0</span>
+            <span class="del" id="stat-del">-0</span>
+          </span>
+        </div>
+        <div class="task-progress" id="task-progress" hidden aria-live="polite">
+          <div class="progress-row">
+            <span class="progress-spinner" aria-hidden="true"></span>
+            <span class="progress-stage" id="progress-stage">正在准备任务…</span>
+            <span class="progress-time" id="progress-time">0.0s</span>
+          </div>
+          <div class="progress-track"><span id="progress-bar"></span></div>
+          <span class="progress-detail" id="progress-detail">灵犀正在理解原文，不会把它当作聊天问题回答</span>
+        </div>
+        <div class="diff" id="diff" tabindex="0" aria-live="polite"></div>
+      </section>
+
+      <section class="qq-view" id="qq-view" hidden>
+        <div class="qq-message-head"><span id="qq-conversation">前台 QQ 会话</span><button class="mini-btn" id="qq-refresh">读取</button></div>
+        <div class="qq-message" id="qq-message">把 QQ 聊天窗口切到前台，然后点“读取”。灵犀只读取 UIA 可见文本。</div>
+        <label for="qq-draft">回复草稿（确认后仅写入，不自动发送）</label>
+        <textarea id="qq-draft" placeholder="生成的草稿会出现在这里，可编辑后写入 QQ"></textarea>
+        <div class="qq-actions"><button class="btn ghost" id="qq-generate">生成草稿</button><button class="btn primary" id="qq-write">确认写入 QQ</button></div>
+      </section>
+
+      <section class="settings-panel" id="settings-panel" hidden>
+        <label>服务商预设<select id="provider-preset"><option value="">自定义 / 不改动</option><option value="deepseek">DeepSeek（deepseek-chat）</option><option value="dashscope">通义千问（qwen-plus）</option><option value="openai">OpenAI（gpt-4o-mini）</option></select></label>
+        <label>模型后端<select id="backend-select"><option value="local">本地 Qwen2.5 1.5B（离线/隐私）</option><option value="cloud">OpenAI 兼容云端（最高质量）</option></select></label>
+        <label>Endpoint<input id="endpoint-input" type="url" placeholder="https://api.openai.com" /></label>
+        <label>Model<input id="model-input" type="text" placeholder="gpt-4o-mini" /></label>
+        <label>API Key<input id="api-key-input" type="password" autocomplete="off" placeholder="仅保留在本次运行内存中" /></label>
+        <p class="settings-note" id="key-note">密钥不会写入配置文件；也可用 LINGXI_OPENAI_API_KEY 环境变量。</p>
+        <p class="settings-note">本地 1.5B 适合短文本和隐私场景；80 字以上或追求高质量时，建议使用云端强模型。</p>
+        <button class="btn primary" id="save-settings">保存设置</button>
+      </section>
+
+      <div class="status" id="status" hidden></div>
+
+      <footer class="actions" id="rewrite-actions">
+        <button class="btn ghost" id="undo-btn">撤销</button>
+        <button class="btn primary" id="apply-btn">
+          应用 <kbd>Ctrl</kbd><kbd>⏎</kbd>
+        </button>
+      </footer>
+      <button class="resize-grip" id="resize-grip" title="拖动调整窗口大小" aria-label="拖动调整窗口大小"></button>
+    </main>
+
+    <script src="app.js"></script>
+  </body>
+</html>
