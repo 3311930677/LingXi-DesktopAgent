@@ -17,7 +17,7 @@ use crate::{Candidate, InputContext};
 
 /// Reorders (and may rescore) engine candidates using context. Implementations
 /// must be pure and order-stable for a given input so results are testable.
-pub trait CandidateReranker {
+pub trait CandidateReranker: Send + Sync {
     /// Short identifier for logs/UI.
     fn name(&self) -> &str;
 

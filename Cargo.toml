@@ -15,7 +15,7 @@ members = [
 # link time). Excluding them keeps `cargo build/test` for the rest of the
 # workspace green under GNU; both are built under MSVC as the overlay's path
 # dependencies (`cargo run` in apps/overlay).
-exclude = ["apps/overlay", "crates/assistant-inference"]
+exclude = ["apps/overlay", "crates/assistant-inference", "crates/assistant-tsf"]
 
 [workspace.package]
 version = "0.1.0"
