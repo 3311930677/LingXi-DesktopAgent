@@ -590,6 +590,7 @@ fn spawn_hotkey_worker(app: AppHandle) {
             match command {
                 AssistantHotkey::Transform => on_transform(&app),
                 AssistantHotkey::Undo => on_undo(&app),
+                AssistantHotkey::Ime => on_ime(&app),
             }
         });
         if let Err(error) = result {
@@ -741,6 +742,82 @@ fn set_panel_focusable(app: AppHandle, focusable: bool) -> Result<(), String> {
     Ok(())
 }
 
+// ─── IME candidate panel commands ────────────────────────────────────────────
+
+#[derive(Serialize)]
+struct ImeCandidateView {
+    text: String,
+    syllables: String,
+    score: f64,
+}
+
+/// Return ranked candidates for a raw pinyin string (called by the IME panel as
+/// the user types). The engine is lightweight and returns in microseconds.
+#[tauri::command]
+fn ime_candidates(pinyin: String, context: String, limit: Option<usize>) -> Vec<ImeCandidateView> {
+    use assistant_ime::{InputContext, InputEngine, PinyinInputEngine};
+    let engine = PinyinInputEngine::builtin();
+    let ctx = InputContext {
+        preceding_text: context,
+        max_candidates: limit.unwrap_or(9),
+    };
+    engine
+        .candidates(&pinyin, &ctx)
+        .into_iter()
+        .map(|c| ImeCandidateView {
+            text: c.text,
+            syllables: c.syllables.join(" "),
+            score: c.score,
+        })
+        .collect()
+}
+
+/// Commit a chosen candidate: write it into the target application via the
+/// existing controlled-paste pipeline, then hide the IME panel. The snapshot is
+/// taken at hotkey-press time (stored in `AppState.snapshot`), so focus drift is
+/// still detected.
+#[tauri::command]
+async fn ime_commit(app: AppHandle, state: State<'_, AppState>, text: String) -> Result<(), String> {
+    // Build a minimal snapshot: the foreground at IME-hotkey time.
+    let snapshot = state
+        .snapshot
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or("no target captured (press Ctrl+Alt+I from a text field)")?;
+    let adapter = WindowsAdapter::new();
+    let receipt = adapter
+        .write_back(&snapshot, &text)
+        .map_err(|e| e.to_string())?;
+    *state.last_receipt.lock().unwrap() = Some(receipt);
+    // Hide IME panel after commit.
+    if let Some(ime_win) = app.get_webview_window("ime") {
+        let _ = ime_win.hide();
+    }
+    Ok(())
+}
+
+fn on_ime(app: &AppHandle) {
+    // Capture current selection/target for write-back after candidate commit.
+    let adapter = WindowsAdapter::new();
+    match adapter.capture_selection() {
+        Ok(snapshot) => {
+            let state = app.state::<AppState>();
+            *state.snapshot.lock().unwrap() = Some(snapshot);
+            state.selection_revision.fetch_add(1, Ordering::AcqRel);
+        }
+        Err(error) => {
+            eprintln!("IME capture failed (will use last known target): {error}");
+        }
+    }
+    // Show and focus the IME panel.
+    if let Some(ime_win) = app.get_webview_window("ime") {
+        position_overlay(&ime_win);
+        let _ = ime_win.show();
+        let _ = ime_win.set_focus();
+    }
+}
+
 fn main() {
     tauri::Builder::default()
         .manage(AppState::default())
@@ -761,7 +838,9 @@ fn main() {
             set_panel_focusable,
             qq_poll_latest,
             generate_qq_draft,
-            write_qq_draft
+            write_qq_draft,
+            ime_candidates,
+            ime_commit
         ])
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {

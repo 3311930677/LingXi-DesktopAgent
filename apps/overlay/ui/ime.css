@@ -1,0 +1,85 @@
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  background: transparent;
+  font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+  user-select: none;
+  overflow: hidden;
+}
+
+#ime-panel {
+  background: rgba(30, 30, 42, 0.92);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  padding: 10px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  height: 100%;
+}
+
+#ime-input-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+#pinyin-input {
+  flex: 1;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 15px;
+  color: #e0e0e0;
+  outline: none;
+  caret-color: #7ec8e3;
+}
+
+#pinyin-input:focus {
+  border-color: #7ec8e3;
+}
+
+#ime-hint {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.4);
+  white-space: nowrap;
+}
+
+#candidates {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-height: 32px;
+  align-items: center;
+}
+
+.candidate {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.06);
+  color: #f0f0f0;
+  font-size: 15px;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+
+.candidate:hover, .candidate.active {
+  background: rgba(126, 200, 227, 0.25);
+}
+
+.candidate .idx {
+  font-size: 11px;
+  color: #7ec8e3;
+  font-weight: 600;
+  margin-right: 2px;
+}
+
+.candidate .word {
+  font-size: 16px;
+}
