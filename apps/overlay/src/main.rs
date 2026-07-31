@@ -767,7 +767,6 @@ struct ImeCandidateView {
     score: f64,
 }
 
-#[derive(Default)]
 struct ImeShared {
     active: bool,
     pinyin: String,
@@ -779,6 +778,25 @@ struct ImeShared {
     /// Candidate selected by Space/Enter/1-9/click. The worker takes this and
     /// performs the clipboard paste outside the low-level hook callback.
     pending_commit: Option<String>,
+    /// Selection pressed before the async candidate response arrived. The
+    /// worker applies it as soon as the matching revision is published.
+    pending_selection: Option<usize>,
+}
+
+impl Default for ImeShared {
+    fn default() -> Self {
+        Self {
+            // Launch directly in Chinese input mode. Ctrl+Alt+I remains an
+            // explicit toggle, but the first run no longer leaks raw pinyin.
+            active: true,
+            pinyin: String::new(),
+            candidates: Vec::new(),
+            committed_context: String::new(),
+            revision: 0,
+            pending_commit: None,
+            pending_selection: None,
+        }
+    }
 }
 
 static IME: std::sync::OnceLock<Arc<Mutex<ImeShared>>> = std::sync::OnceLock::new();
@@ -826,6 +844,7 @@ fn ime_toggle() -> bool {
         s.candidates.clear();
         s.committed_context.clear();
         s.pending_commit = None;
+        s.pending_selection = None;
     }
     s.revision = s.revision.wrapping_add(1);
     s.active
@@ -947,12 +966,20 @@ fn spawn_ime_worker(app: AppHandle) {
                 // Discard a stale server response if another key arrived.
                 if s.active && s.revision == revision && s.pinyin == pinyin {
                     s.candidates = candidates;
+                    let queued = if let Some(index) = s.pending_selection.take() {
+                        queue_candidate(&mut s, index);
+                        s.pending_commit.is_some()
+                    } else {
+                        false
+                    };
                     seen_revision = revision;
                     drop(s);
-                    if let Some(window) = app.get_webview_window("ime") {
-                        position_ime_window(&window);
-                        let _ = window.show();
-                        visible = true;
+                    if !queued {
+                        if let Some(window) = app.get_webview_window("ime") {
+                            position_ime_window(&window);
+                            let _ = window.show();
+                            visible = true;
+                        }
                     }
                 }
             }
@@ -991,7 +1018,7 @@ fn position_ime_window(window: &WebviewWindow) {
         return;
     }
     let work = info.rcWork;
-    let size = window.outer_size().unwrap_or(PhysicalSize::new(620, 64));
+    let size = window.outer_size().unwrap_or(PhysicalSize::new(720, 92));
     let x = point.x.min(work.right - size.width as i32).max(work.left);
     let y = (point.y + 8)
         .min(work.bottom - size.height as i32)
@@ -1036,11 +1063,14 @@ unsafe extern "system" fn ime_hook_proc(
         let mut s = shared.lock().unwrap();
         if (0x41..=0x5A).contains(&vk) {
             s.pinyin.push((vk as u8 as char).to_ascii_lowercase());
+            s.candidates.clear();
+            s.pending_selection = None;
             s.revision = s.revision.wrapping_add(1);
             true
         } else if vk == VK_BACK.0 && !s.pinyin.is_empty() {
             s.pinyin.pop();
             s.candidates.clear();
+            s.pending_selection = None;
             s.revision = s.revision.wrapping_add(1);
             true
         } else if vk == VK_ESCAPE.0 {
@@ -1050,13 +1080,23 @@ unsafe extern "system" fn ime_hook_proc(
             s.candidates.clear();
             s.committed_context.clear();
             s.pending_commit = None;
+            s.pending_selection = None;
             s.revision = s.revision.wrapping_add(1);
             true
-        } else if (vk == VK_SPACE.0 || vk == VK_RETURN.0) && !s.candidates.is_empty() {
-            queue_candidate(&mut s, 0);
+        } else if (vk == VK_SPACE.0 || vk == VK_RETURN.0) && !s.pinyin.is_empty() {
+            if s.candidates.is_empty() {
+                s.pending_selection = Some(0);
+            } else {
+                queue_candidate(&mut s, 0);
+            }
             true
-        } else if (0x31..=0x39).contains(&vk) && !s.candidates.is_empty() {
-            queue_candidate(&mut s, (vk - 0x31) as usize);
+        } else if (0x31..=0x39).contains(&vk) && !s.pinyin.is_empty() {
+            let index = (vk - 0x31) as usize;
+            if s.candidates.is_empty() {
+                s.pending_selection = Some(index);
+            } else {
+                queue_candidate(&mut s, index);
+            }
             true
         } else {
             // Only eat non-letter keys while composing; ordinary keys pass
@@ -1089,6 +1129,7 @@ fn on_ime(app: &AppHandle) {
         s.pinyin.clear();
         s.candidates.clear();
         s.pending_commit = None;
+        s.pending_selection = None;
         if !s.active {
             s.committed_context.clear();
         }

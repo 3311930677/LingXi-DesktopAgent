@@ -7,12 +7,22 @@
 <link rel="stylesheet" href="ime.css">
 </head>
 <body>
-<div id="ime-panel">
-  <div id="mode-badge">中</div>
-  <div id="pinyin-display"></div>
-  <div id="divider"></div>
-  <div id="candidates"></div>
-</div>
+  <main id="ime-panel">
+    <div class="topline">
+      <div class="brand" aria-label="LingXi">
+        <span class="brand-mark">L</span>
+        <span class="brand-name">LINGXI</span>
+      </div>
+      <div class="composition">
+        <span id="pinyin-display"></span><span class="caret"></span>
+      </div>
+      <div class="status"><span class="status-dot"></span>中文</div>
+    </div>
+    <div class="bottomline">
+      <div id="candidates"></div>
+      <div class="hint">空格首选 · Esc 退出</div>
+    </div>
+  </main>
 <script src="ime.js"></script>
 </body>
 </html>
