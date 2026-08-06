@@ -309,11 +309,20 @@ fn choose_editor(elements: Vec<IUIAutomationElement>) -> Option<IUIAutomationEle
         // the bottom of the window while the search box is at the very top. When
         // neither editor holds focus (the usual case, since the LingXi panel
         // stole it) and keyword scores tie, the lower control is the composer.
+        // Using the full height (bottom) rather than just `top` makes the
+        // composer win even when QQ's search box has a non-zero top inset.
         let bottom = unsafe { element.CurrentBoundingRectangle() }
-            .map(|rect| rect.top)
+            .map(|rect| rect.bottom)
             .unwrap_or(0);
         candidates.push((focused, score, bottom, element));
     }
+    // Drop controls sitting in the top strip entirely. QQ's top search/contact
+    // filter box always lives in the first ~120px of the window, and its
+    // AutomationId/Name are frequently empty on QQNT, so the keyword scorer
+    // cannot penalize it. Excluding the top strip makes the composer win
+    // regardless of how QQ labels its search box.
+    const SEARCH_STRIP_HEIGHT: i32 = 120;
+    candidates.retain(|(_, _, bottom, _)| *bottom > SEARCH_STRIP_HEIGHT);
     candidates
         .into_iter()
         .max_by_key(|(focused, score, bottom, _)| (*focused as usize, *score, *bottom))
