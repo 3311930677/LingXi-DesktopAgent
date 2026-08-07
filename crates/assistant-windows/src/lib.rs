@@ -25,7 +25,10 @@ pub use capability::FocusedProbe;
 pub use foreground::{foreground_info, window_info, ForegroundInfo};
 pub use hotkey::{run_assistant_hotkey_loop, run_hotkey_loop, AssistantHotkey};
 pub use keyboard::{type_unicode, wait_for_trigger_release};
-pub use qq::{qq_latest_message, qq_write_draft, remember_foreground_if_qq, QqMessageSnapshot};
+pub use qq::{
+    capture_qq_selection_text, qq_latest_message, qq_write_draft, remember_foreground_if_qq,
+    resolve_qq_window, QqMessageSnapshot,
+};
 pub use read::SelectionRead;
 
 /// Insert Unicode text at the current caret without requiring a selected range.

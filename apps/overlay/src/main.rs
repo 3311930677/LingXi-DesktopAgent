@@ -27,8 +27,8 @@ use assistant_core::{
 };
 use assistant_inference::{CloudBackend, CloudConfig, LocalBackend, ModelBackend, ModelTask};
 use assistant_windows::{
-    foreground_info, qq_write_draft, remember_foreground_if_qq, run_assistant_hotkey_loop,
-    wait_for_trigger_release, AssistantHotkey, WindowsAdapter,
+    capture_qq_selection_text, qq_write_draft, remember_foreground_if_qq, resolve_qq_window,
+    run_assistant_hotkey_loop, wait_for_trigger_release, AssistantHotkey, WindowsAdapter,
 };
 use serde::{Deserialize, Serialize};
 use tauri::{
@@ -351,40 +351,52 @@ fn toggle_panel(app: AppHandle) -> Result<bool, String> {
 /// only reliable source of truth for "which message to reply to".
 #[tauri::command]
 async fn qq_poll_latest(_state: State<'_, AppState>) -> Result<Option<QqMessageView>, String> {
-    let info = tauri::async_runtime::spawn_blocking(foreground_info)
+    let info = tauri::async_runtime::spawn_blocking(resolve_qq_window)
         .await
         .map_err(|e| format!("foreground probe failed: {e}"))?;
-    let info = match info {
-        Ok(info) if is_qq_foreground(&info.process_name) => info,
-        _ => return Ok(None),
-    };
-    let conversation = info.title.clone();
-    Ok(Some(QqMessageView {
-        conversation,
-        message: String::new(),
-        is_new: false,
-    }))
+    // `resolve_qq_window` already falls back to the last remembered QQ window
+    // (recorded by the background sampler every 500ms) when the live foreground
+    // is something else — typically this LingXi panel after the user clicked a
+    // button. Only when neither is available do we tell the UI QQ isn't around.
+    match info {
+        Ok(info) => Ok(Some(QqMessageView {
+            conversation: info.title,
+            message: String::new(),
+            is_new: false,
+        })),
+        Err(_) => Ok(None),
+    }
 }
 
 /// Capture the user's current text selection inside QQ. The user must select
 /// the message they want to reply to (double-click or drag-select) before
 /// calling this. Returns the selected text verbatim.
+///
+/// Unlike `capture_selection` (which needs QQ in the foreground), this scans
+/// the remembered QQ window's UIA tree for a TextPattern element with a
+/// non-empty selection — so the DOM selection survives even after the panel
+/// steals keyboard focus.
 #[tauri::command]
 async fn capture_qq_selection(_state: State<'_, AppState>) -> Result<QqMessageView, String> {
-    let snapshot = tauri::async_runtime::spawn_blocking(|| {
-        let adapter = WindowsAdapter::new();
-        adapter.capture_selection()
+    let (info, message) = tauri::async_runtime::spawn_blocking(|| {
+        let info = resolve_qq_window();
+        let text = capture_qq_selection_text();
+        (info, text)
     })
     .await
-    .map_err(|e| format!("selection capture failed: {e}"))?
-    .map_err(|e| format!("selection capture: {e}"))?;
-    let message = snapshot.selected_text.trim().to_string();
+    .map_err(|e| format!("selection capture failed: {e}"))?;
+
+    let message = message.map_err(|e| format!("selection capture: {e}"))?;
+    let message = message.trim().to_string();
     if message.is_empty() {
         return Err("没有选中文字。请在 QQ 里双击或拖选对方的消息后再试。".into());
     }
-    let info = foreground_info().map_err(|e| format!("foreground probe: {e}"))?;
+    let conversation = match info {
+        Ok(i) => i.title,
+        Err(_) => String::new(),
+    };
     Ok(QqMessageView {
-        conversation: info.title,
+        conversation,
         message,
         is_new: true,
     })
@@ -617,12 +629,6 @@ fn start_window_resize(window: WebviewWindow) -> Result<(), String> {
 /// Continuously remember the last foreground QQ window so the panel's "read"
 /// and "write draft" buttons still target QQ after the panel takes focus. This
 /// is a cheap Win32-only poll (no COM/UIA), safe to run at a modest cadence.
-/// Whether a process image name is a QQ client (QQ.exe or QQNT.exe).
-fn is_qq_foreground(process_name: &str) -> bool {
-    let p = process_name.to_ascii_lowercase();
-    p == "qq.exe" || p == "qqnt.exe"
-}
-
 fn spawn_qq_foreground_sampler() {
     thread::spawn(|| loop {
         remember_foreground_if_qq();

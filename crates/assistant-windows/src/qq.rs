@@ -12,8 +12,9 @@ use assistant_core::AdapterError;
 use windows::core::BSTR;
 use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::Accessibility::{
-    IUIAutomationElement, IUIAutomationValuePattern, UIA_EditControlTypeId,
-    UIA_ListItemControlTypeId, UIA_ValuePatternId,
+    IUIAutomationElement, IUIAutomationTextPattern, IUIAutomationTextRange,
+    IUIAutomationValuePattern, UIA_EditControlTypeId, UIA_ListItemControlTypeId,
+    UIA_TextPatternId, UIA_ValuePatternId,
 };
 use windows::Win32::UI::WindowsAndMessaging::{IsWindow, SetForegroundWindow};
 
@@ -51,7 +52,12 @@ pub fn remember_foreground_if_qq() {
 
 /// Resolve the QQ window to operate on: the live foreground when it is QQ,
 /// otherwise the last remembered QQ window if it still exists and is still QQ.
-fn resolve_qq_window() -> Result<ForegroundInfo, AdapterError> {
+///
+/// Public so the overlay's `qq_poll_latest` / `capture_qq_selection` commands
+/// can reuse the same "foreground-or-remembered" fallback instead of naively
+/// requiring QQ to be the *current* foreground — which it never is once the
+/// user clicks a button on the LingXi panel (the panel steals foreground).
+pub fn resolve_qq_window() -> Result<ForegroundInfo, AdapterError> {
     let foreground = foreground_info()?;
     if is_qq_process(&foreground.process_name) {
         LAST_QQ_HWND.store(foreground.hwnd, Ordering::Relaxed);
@@ -252,6 +258,63 @@ fn join_trailing_message(candidates: &[String]) -> Option<String> {
 fn is_qq_process(process_name: &str) -> bool {
     let process = process_name.to_ascii_lowercase();
     process == "qq.exe" || process == "qqnt.exe"
+}
+
+/// Capture the user's text selection inside QQ by scanning the QQ window's UIA
+/// tree for a `TextPattern` element whose `GetSelection()` is non-empty.
+///
+/// Unlike `WindowsAdapter::capture_selection` (which uses `GetFocusedElement`
+/// and therefore requires QQ to be the foreground window), this walks the
+/// remembered QQ window's subtree directly. QQNT is Chromium-based and its
+/// contenteditable message bubbles expose `TextPattern`; the DOM selection
+/// survives foreground changes, so we can read it even when the LingXi panel
+/// currently holds the focus.
+pub fn capture_qq_selection_text() -> Result<String, AdapterError> {
+    let window = resolve_qq_window()?;
+    let _com = ComGuard::new()?;
+    let client = UiaClient::new()?;
+    let root = client.element_from_hwnd(window.hwnd)?;
+    let elements = client.descendants(&root)?;
+
+    for element in &elements {
+        let tp = match get_pattern::<IUIAutomationTextPattern>(element, UIA_TextPatternId) {
+            Some(tp) => tp,
+            None => continue,
+        };
+        // SAFETY: valid TextPattern object.
+        let ranges = match unsafe { tp.GetSelection() } {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+        // SAFETY: valid COM array.
+        let len = match unsafe { ranges.Length() } {
+            Ok(n) => n,
+            Err(_) => continue,
+        };
+        if len == 0 {
+            continue;
+        }
+        for i in 0..len {
+            // SAFETY: index in range.
+            if let Ok(range) = unsafe { ranges.GetElement(i) } {
+                let text = text_range_text(&range).unwrap_or_default();
+                let trimmed = text.trim();
+                if !trimmed.is_empty() {
+                    return Ok(trimmed.to_string());
+                }
+            }
+        }
+    }
+    Err(AdapterError::NoSelection)
+}
+
+/// Read the plain text of a UIA text range.
+fn text_range_text(range: &IUIAutomationTextRange) -> Result<String, AdapterError> {
+    // SAFETY: valid range object. -1 = no limit on length.
+    let text = unsafe { range.GetText(-1) }
+        .map_err(|e| AdapterError::Platform(format!("TextRange.GetText: {e}")))?
+        .to_string();
+    Ok(text)
 }
 
 #[allow(dead_code)]
