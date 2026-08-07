@@ -104,6 +104,7 @@ pub fn qq_latest_message() -> Result<QqMessageSnapshot, AdapterError> {
     let elements = client.descendants(&root)?;
 
     let mut candidates = Vec::new();
+    let mut diag_count = 0;
     for element in &elements {
         let control_type = match unsafe { element.CurrentControlType() } {
             Ok(value) => value,
@@ -129,12 +130,33 @@ pub fn qq_latest_message() -> Result<QqMessageSnapshot, AdapterError> {
         if rel_x < 400 || !(100..=700).contains(&rel_y) {
             continue;
         }
+        let name = unsafe { element.CurrentName() }
+            .ok()
+            .map(|value| value.to_string())
+            .unwrap_or_default();
+        let cls = unsafe { element.CurrentClassName() }
+            .ok()
+            .map(|value| value.to_string())
+            .unwrap_or_default();
         // Prefer the node's full text via TextPattern/ValuePattern: QQ is a
         // Chromium client whose message bubbles expose their complete content
         // there, while `Name` is frequently a truncated label. Fall back to
         // `Name` only when neither pattern is available.
         let text = element_text(element).unwrap_or_default();
         let text = text.trim();
+        if diag_count < 25 {
+            eprintln!(
+                "[qq.read] ct={:?} rel=({},{}) name={:?} cls={:?} text_len={} text_head={:?}",
+                control_type,
+                rel_x,
+                rel_y,
+                name,
+                cls,
+                text.chars().count(),
+                text.chars().take(40).collect::<String>()
+            );
+            diag_count += 1;
+        }
         if is_message_candidate(text, &foreground.title) {
             candidates.push((rel_y, text.to_string()));
         }

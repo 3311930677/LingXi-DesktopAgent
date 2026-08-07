@@ -590,8 +590,9 @@ el.closeBtn.addEventListener("click", close);
 el.pinBtn.addEventListener("click", () => el.pinBtn.classList.toggle("is-on"));
 const quitBtn = document.getElementById("quit-btn");
 if (quitBtn) {
-  quitBtn.addEventListener("click", () => {
-    if (confirm("确定退出灵犀？退出后桌宠和快捷键都会关闭。")) {
+  quitBtn.addEventListener("click", async () => {
+    const ok = await showConfirmDialog("退出灵犀", "确定退出灵犀？退出后桌宠和快捷键都会关闭。");
+    if (ok) {
       if (invoke) invoke("quit_app").catch(() => {});
       else window.close();
     }
@@ -628,6 +629,57 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") close();
   else if (e.ctrlKey && e.key === "Enter") apply();
 });
+
+// Lightweight in-window modal confirm. The browser's native `confirm()` opens
+// a system dialog that often renders outside the small overlay window (the
+// "取消" button ends up off-screen). This keeps everything inside the panel.
+function showConfirmDialog(title, message) {
+  return new Promise((resolve) => {
+    // Block re-entry: if a dialog is already open, treat as cancel.
+    const existing = document.querySelector(".confirm-overlay");
+    if (existing) {
+      resolve(false);
+      return;
+    }
+    const overlay = document.createElement("div");
+    overlay.className = "confirm-overlay";
+    overlay.innerHTML = `
+      <div class="confirm-card">
+        <div class="confirm-title">${title}</div>
+        <div class="confirm-message">${message}</div>
+        <div class="confirm-actions">
+          <button type="button" class="confirm-cancel">取消</button>
+          <button type="button" class="confirm-ok">确定</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+    const cleanup = (result) => {
+      overlay.remove();
+      resolve(result);
+    };
+    overlay.querySelector(".confirm-cancel").addEventListener("click", () => cleanup(false));
+    overlay.querySelector(".confirm-ok").addEventListener("click", () => cleanup(true));
+    overlay.addEventListener("click", (e) => {
+      if (e.target === overlay) cleanup(false);
+    });
+    const keyHandler = (e) => {
+      if (e.key === "Escape") {
+        document.removeEventListener("keydown", keyHandler, true);
+        cleanup(false);
+      } else if (e.key === "Enter") {
+        document.removeEventListener("keydown", keyHandler, true);
+        cleanup(true);
+      }
+    };
+    document.addEventListener("keydown", keyHandler, true);
+    // Focus the cancel button so Enter does not accidentally confirm.
+    setTimeout(() => overlay.querySelector(".confirm-cancel").focus(), 10);
+  });
+}
+
+// Adapt the synchronous call sites that still use a boolean return.
+window.showConfirmDialog = showConfirmDialog;
 
 // Kick off: poll in Tauri, or render the mock once in a browser.
 if (invoke) {

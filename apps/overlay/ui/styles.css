@@ -150,6 +150,65 @@ body {
 .icon-btn:hover { background: rgba(255, 255, 255, 0.08); color: var(--text); }
 .icon-btn.is-on { color: var(--accent); }
 #close-btn:hover { background: rgba(255, 96, 122, 0.18); color: #ff8ea1; }
+#quit-btn:hover { background: rgba(255, 96, 122, 0.25); color: #ff8ea1; }
+
+/* In-window modal confirm dialog. The native browser `confirm()` opens a
+   system dialog that often renders outside the small overlay window, hiding
+   the cancel button. This keeps the dialog inside the panel. */
+.confirm-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(2px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+}
+.confirm-card {
+  background: var(--card-bg, #1f232c);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  padding: 18px 20px 16px;
+  width: min(320px, 90vw);
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.5);
+}
+.confirm-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--fg, #e8e8ef);
+  margin-bottom: 8px;
+}
+.confirm-message {
+  font-size: 13px;
+  color: var(--fg-dim, #b8b8c4);
+  line-height: 1.5;
+  margin-bottom: 16px;
+}
+.confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+.confirm-actions button {
+  padding: 6px 16px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  font-size: 13px;
+  font-family: inherit;
+}
+.confirm-cancel {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--fg-dim, #b8b8c4);
+}
+.confirm-cancel:hover { background: rgba(255, 255, 255, 0.12); }
+.confirm-ok {
+  background: rgba(255, 96, 122, 0.22);
+  color: #ff8ea1;
+  border-color: rgba(255, 96, 122, 0.4);
+}
+.confirm-ok:hover { background: rgba(255, 96, 122, 0.34); }
 
 .modes {
   display: grid;
