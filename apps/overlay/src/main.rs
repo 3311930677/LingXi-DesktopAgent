@@ -27,19 +27,20 @@ use assistant_core::{
 };
 use assistant_inference::{CloudBackend, CloudConfig, LocalBackend, ModelBackend, ModelTask};
 use assistant_windows::{
-    insert_text_at_caret, qq_latest_message, qq_write_draft, remember_foreground_if_qq,
-    run_assistant_hotkey_loop, wait_for_trigger_release, AssistantHotkey, WindowsAdapter,
+    qq_latest_message, qq_write_draft, remember_foreground_if_qq, run_assistant_hotkey_loop,
+    wait_for_trigger_release, AssistantHotkey, WindowsAdapter,
 };
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager, PhysicalPosition, PhysicalSize, State, WebviewWindow};
+use tauri::{
+    menu::{Menu, MenuItem, PredefinedMenuItem},
+    tray::TrayIconBuilder,
+    AppHandle, Manager, PhysicalPosition, PhysicalSize, State, WebviewWindow,
+};
 use windows::Win32::Foundation::{HWND, POINT};
 use windows::Win32::Graphics::Gdi::{
     GetMonitorInfoW, MonitorFromPoint, MONITORINFO, MONITOR_DEFAULTTONEAREST,
 };
-use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetAsyncKeyState, ReleaseCapture, VK_BACK, VK_CONTROL, VK_ESCAPE, VK_LWIN, VK_MENU, VK_RETURN,
-    VK_RWIN, VK_SPACE,
-};
+use windows::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture;
 use windows::Win32::UI::WindowsAndMessaging::{
     GetCursorPos, GetWindowLongPtrW, SendMessageW, SetWindowLongPtrW, GWL_EXSTYLE, HTBOTTOMRIGHT,
     WM_NCLBUTTONDOWN, WS_EX_NOACTIVATE,
@@ -594,7 +595,6 @@ fn spawn_hotkey_worker(app: AppHandle) {
             match command {
                 AssistantHotkey::Transform => on_transform(&app),
                 AssistantHotkey::Undo => on_undo(&app),
-                AssistantHotkey::Ime => on_ime(&app),
             }
         });
         if let Err(error) = result {
@@ -746,8 +746,12 @@ fn set_panel_focusable(app: AppHandle, focusable: bool) -> Result<(), String> {
     Ok(())
 }
 
-// ─── IME mode: global keyboard hook + candidate-only floating panel ──────────
-
+/* IME mode removed: OwO is the only system input method. Keeping LingXi's former
+   WH_KEYBOARD_LL implementation here disabled would still risk accidental reactivation, so the
+   entire implementation is excluded and will be deleted after the migration remains stable. */
+#[cfg(any())]
+mod removed_ime_hook {
+use super::*;
 use std::sync::Arc;
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, GetMessageW as GetMsg, SetWindowsHookExW, UnhookWindowsHookEx, HC_ACTION,
@@ -1154,6 +1158,58 @@ fn on_ime(app: &AppHandle) {
         }
     }
 }
+}
+
+/// Install a system tray icon with show / hide / quit actions. Until this
+/// lands the user had to kill `overlay.exe` from Task Manager to close the
+/// LingXi panel, which is unfriendly for a personal tool that lives in the
+/// background. The tray icon reuses the bundled window icon so there is no
+/// extra asset to ship.
+fn install_tray(app: &AppHandle) -> tauri::Result<()> {
+    let show_panel = MenuItem::with_id(app, "tray:show", "显示面板", true, None::<&str>)?;
+    let hide_panel = MenuItem::with_id(app, "tray:hide", "隐藏面板", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "tray:quit", "退出灵犀", true, None::<&str>)?;
+    let separator = PredefinedMenuItem::separator(app)?;
+    let menu = Menu::with_items(app, &[&show_panel, &hide_panel, &separator, &quit])?;
+    let icon = app
+        .default_window_icon()
+        .cloned()
+        .ok_or_else(|| tauri::Error::AssetNotFound("default window icon".into()))?;
+    TrayIconBuilder::with_id("lingxi-tray")
+        .icon(icon)
+        .tooltip("灵犀 · L3 跨应用 AI 助手")
+        .menu(&menu)
+        .show_menu_on_left_click(false)
+        .on_menu_event(|app, event| match event.id.as_ref() {
+            "tray:show" => {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.show();
+                }
+            }
+            "tray:hide" => {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.hide();
+                }
+            }
+            "tray:quit" => {
+                app.exit(0);
+            }
+            _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+            if let tauri::tray::TrayIconEvent::DoubleClick { .. } = event {
+                if let Some(window) = tray.app_handle().get_webview_window("main") {
+                    if window.is_visible().unwrap_or(false) {
+                        let _ = window.hide();
+                    } else {
+                        let _ = window.show();
+                    }
+                }
+            }
+        })
+        .build(app)?;
+    Ok(())
+}
 
 fn main() {
     tauri::Builder::default()
@@ -1175,10 +1231,7 @@ fn main() {
             set_panel_focusable,
             qq_poll_latest,
             generate_qq_draft,
-            write_qq_draft,
-            ime_state,
-            ime_commit,
-            ime_toggle
+            write_qq_draft
         ])
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {
@@ -1188,11 +1241,6 @@ fn main() {
                 make_non_activating(&window).map_err(std::io::Error::other)?;
                 position_pet(&window);
             }
-            if let Some(window) = app.get_webview_window("ime") {
-                // The candidate bar must never steal focus from the editor;
-                // text is inserted at that editor's still-active caret.
-                make_non_activating(&window).map_err(std::io::Error::other)?;
-            }
             // Only local users need the GGUF. A persisted cloud configuration
             // must not trigger a needless ~400MB download at startup.
             if app.state::<AppState>().backend.lock().unwrap().backend == "local" {
@@ -1200,8 +1248,7 @@ fn main() {
             }
             spawn_hotkey_worker(app.handle().clone());
             spawn_qq_foreground_sampler();
-            spawn_ime_hook_thread();
-            spawn_ime_worker(app.handle().clone());
+            install_tray(app.handle())?;
             Ok(())
         })
         .run(tauri::generate_context!())

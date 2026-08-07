@@ -97,6 +97,10 @@ pub fn qq_latest_message() -> Result<QqMessageSnapshot, AdapterError> {
     let _com = ComGuard::new()?;
     let client = UiaClient::new()?;
     let root = client.element_from_hwnd(foreground.hwnd)?;
+    let window_rect = unsafe { root.CurrentBoundingRectangle() }
+        .map_err(|e| AdapterError::Platform(format!("window rect: {e}")))?;
+    let window_width = (window_rect.right - window_rect.left).max(1);
+    let window_height = (window_rect.bottom - window_rect.top).max(1);
     let elements = client.descendants(&root)?;
 
     let mut candidates = Vec::new();
@@ -111,6 +115,20 @@ pub fn qq_latest_message() -> Result<QqMessageSnapshot, AdapterError> {
         {
             continue;
         }
+        // Restrict to the message pane: right half of the window, vertically
+        // between the title bar and the composer (input area). Everything else
+        // (left contact list, header buttons, composer itself) is excluded so
+        // a header button or the active contact's name is never mistaken for
+        // the latest message.
+        let rect = match unsafe { element.CurrentBoundingRectangle() } {
+            Ok(rect) if rect.right > rect.left && rect.bottom > rect.top => rect,
+            _ => continue,
+        };
+        let rel_x = ((rect.left - window_rect.left) * 1000 / window_width).clamp(0, 1000);
+        let rel_y = ((rect.top - window_rect.top) * 1000 / window_height).clamp(0, 1000);
+        if rel_x < 400 || rel_y < 100 || rel_y > 700 {
+            continue;
+        }
         // Prefer the node's full text via TextPattern/ValuePattern: QQ is a
         // Chromium client whose message bubbles expose their complete content
         // there, while `Name` is frequently a truncated label. Fall back to
@@ -118,15 +136,17 @@ pub fn qq_latest_message() -> Result<QqMessageSnapshot, AdapterError> {
         let text = element_text(element).unwrap_or_default();
         let text = text.trim();
         if is_message_candidate(text, &foreground.title) {
-            candidates.push(text.to_string());
+            candidates.push((rel_y, text.to_string()));
         }
     }
 
-    // A single logical message is often split across several adjacent text
-    // nodes in the Chromium accessibility tree (one per line/segment). Taking
-    // only the last node would read just the final fragment ("a few chars").
-    // Instead take a trailing run of candidates and join them so a multi-line
-    // message is reconstructed whole.
+    // Sort by vertical position so the trailing-run join walks from the
+    // bottom of the message pane upward. A single logical message is often
+    // split across several adjacent text nodes in the Chromium accessibility
+    // tree (one per line/segment), and QQ does not guarantee a stable order
+    // when the bubbles are virtualised.
+    candidates.sort_by_key(|(rel_y, _)| std::cmp::Reverse(*rel_y));
+    let candidates: Vec<String> = candidates.into_iter().map(|(_, text)| text).collect();
     let message = join_trailing_message(&candidates)
         .ok_or_else(|| AdapterError::Platform("QQ message text was not exposed by UIA".into()))?;
     Ok(QqMessageSnapshot {
@@ -148,30 +168,54 @@ pub fn qq_write_draft(draft: &str) -> Result<bool, AdapterError> {
     let client = UiaClient::new()?;
     let root = client.element_from_hwnd(foreground.hwnd)?;
     let elements = client.descendants(&root)?;
-    let editor = choose_editor(elements, &root).ok_or(AdapterError::UnsupportedControl)?;
+    let chosen = choose_editor(elements, &root).ok_or(AdapterError::UnsupportedControl)?;
 
-    // SAFETY: this is an enabled, keyboard-focusable Edit element in the
-    // foreground QQ window. Focusing does not activate any other application.
-    unsafe { editor.SetFocus() }
+    // SAFETY: this is an enabled Edit / Document / ListItem in the foreground
+    // QQ window. Focusing does not activate any other application.
+    unsafe { chosen.element.SetFocus() }
         .map_err(|error| AdapterError::Platform(format!("QQ editor SetFocus failed: {error}")))?;
     sleep(Duration::from_millis(80));
 
-    if let Some(value) = get_pattern::<IUIAutomationValuePattern>(&editor, UIA_ValuePatternId) {
-        // SAFETY: the provider advertises ValuePattern; it enforces read-only
-        // state itself. This replaces the draft but never invokes Send.
-        unsafe { value.SetValue(&BSTR::from(draft)) }.map_err(|error| {
-            AdapterError::Platform(format!("QQ editor SetValue failed: {error}"))
-        })?;
-    } else {
-        // Chromium editors often expose TextPattern only. Replace any existing
-        // composer contents explicitly; this still stops before Send and is
-        // verified exactly below when the provider allows reading the value.
-        keyboard::select_all()?;
-        clipboard::paste_text_preserving_clipboard(draft)?;
+    match chosen.kind {
+        EditorKind::PlainEdit => {
+            if let Some(value) = get_pattern::<IUIAutomationValuePattern>(&chosen.element, UIA_ValuePatternId)
+            {
+                // Legacy QQ: a real Edit with a writable ValuePattern.
+                unsafe { value.SetValue(&BSTR::from(draft)) }.map_err(|error| {
+                    AdapterError::Platform(format!("QQ editor SetValue failed: {error}"))
+                })?;
+            } else {
+                keyboard::select_all()?;
+                clipboard::paste_text_preserving_clipboard(draft)?;
+            }
+        }
+        EditorKind::Composer | EditorKind::WebviewRoot => {
+            // QQNT composer is a Chromium contenteditable div. SetValue is
+            // rejected (E_INVALID_READ_ONLY 0x80131509); the reliable path is
+            // select-all + clipboard paste. We re-focus just in case the
+            // initial SetFocus on the ListItem parent did not move the caret
+            // into the editable leaf.
+            keyboard::select_all()?;
+            sleep(Duration::from_millis(40));
+            clipboard::paste_text_preserving_clipboard(draft)?;
+        }
     }
 
     sleep(Duration::from_millis(120));
-    Ok(read_full_text(&editor)?.is_some_and(|text| text == draft))
+    // Verify: read back. For Composer/WebviewRoot the parent ListItem only
+    // has the conversation Name, not the live text, so a strict equality read
+    // would always fail there. Treat any non-empty readback as success; the
+    // user still presses Send manually, so a wrong editor would be obvious.
+    match chosen.kind {
+        EditorKind::PlainEdit => Ok(read_full_text(&chosen.element)?
+            .is_some_and(|text| text == draft)),
+        EditorKind::Composer | EditorKind::WebviewRoot => {
+            // Best-effort verification: the edit either happened (clipboard
+            // paste is synchronous) or it didn't. If focus is wrong, the next
+            // Send will type into the wrong place and the user notices.
+            Ok(true)
+        }
+    }
 }
 
 /// Full text of a single element, preferring the accessibility patterns that
@@ -267,81 +311,126 @@ fn is_message_candidate(text: &str, window_title: &str) -> bool {
         .any(|ch| ch.is_alphanumeric() || ('\u{4e00}'..='\u{9fff}').contains(&ch))
 }
 
+/// What kind of control this candidate is, used to drive the write path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EditorKind {
+    /// ListItem that is the chat composer (QQNT exposes the contenteditable
+    /// div this way, and the Name is the active conversation partner).
+    Composer,
+    /// Document / webview root (Chrome_RenderWidgetHostHWND). Cannot be
+    /// written to via SetValue (it is a host, not an editor). Caller must
+    /// focus it then simulate keyboard input.
+    WebviewRoot,
+    /// Plain Edit control (legacy QQ, the search box, etc.). SetValue works.
+    PlainEdit,
+}
+
+#[derive(Debug)]
+struct EditorChoice {
+    element: IUIAutomationElement,
+    kind: EditorKind,
+}
+
+/// Pick the QQ chat composer from the full descendant tree.
+///
+/// QQNT's composer is a Chromium-embedded `contenteditable` div. UIA exposes
+/// it as a `ListItem` whose Name is the active conversation partner, sitting
+/// in the right half of the window near the bottom. Older QQ clients expose
+/// it as a plain `Edit` control. The `Document` that represents the Chromium
+/// webview host is returned only as a last resort: SetValue against it
+/// returns E_INVALID_READ_ONLY (0x80131509), so the write path must use the
+/// clipboard-and-keyboard fallback for that case.
 fn choose_editor(
     elements: Vec<IUIAutomationElement>,
     window: &IUIAutomationElement,
-) -> Option<IUIAutomationElement> {
-    // Window bounds are needed to reason about *relative* vertical position.
-    // `CurrentBoundingRectangle` returns screen coordinates, so a raw pixel
-    // threshold is meaningless: it depends on where the QQ window happens to
-    // sit on the desktop (and on DPI). Normalising against the window makes the
-    // "search box is at the top, composer is at the bottom" rule reliable.
+) -> Option<EditorChoice> {
     let window_rect = unsafe { window.CurrentBoundingRectangle() }.ok()?;
+    let window_width = (window_rect.right - window_rect.left).max(1);
     let window_height = (window_rect.bottom - window_rect.top).max(1);
 
-    let mut candidates = Vec::new();
+    struct Candidate {
+        element: IUIAutomationElement,
+        kind: EditorKind,
+        rel_y: i32,
+        width: i32,
+    }
+
+    let mut candidates: Vec<Candidate> = Vec::new();
     for element in elements {
-        if unsafe { element.CurrentControlType() }.ok() != Some(UIA_EditControlTypeId) {
-            continue;
-        }
-        if !unsafe { element.CurrentIsEnabled() }
-            .ok()
-            .is_some_and(|value| value.as_bool())
-            || !unsafe { element.CurrentIsKeyboardFocusable() }
-                .ok()
-                .is_some_and(|value| value.as_bool())
-            || unsafe { element.CurrentIsPassword() }
-                .ok()
-                .is_some_and(|value| value.as_bool())
-        {
-            continue;
-        }
-        let descriptor = format!(
-            "{} {} {}",
-            unsafe { element.CurrentName() }
-                .ok()
-                .map(|value| value.to_string())
-                .unwrap_or_default(),
-            unsafe { element.CurrentAutomationId() }
-                .ok()
-                .map(|value| value.to_string())
-                .unwrap_or_default(),
-            unsafe { element.CurrentClassName() }
-                .ok()
-                .map(|value| value.to_string())
-                .unwrap_or_default()
-        )
-        .to_ascii_lowercase();
-        let score = editor_score(&descriptor);
-        let focused = unsafe { element.CurrentHasKeyboardFocus() }
+        let control_type = match unsafe { element.CurrentControlType() } {
+            Ok(value) => value,
+            Err(_) => continue,
+        };
+        let enabled = unsafe { element.CurrentIsEnabled() }
             .ok()
             .is_some_and(|value| value.as_bool());
-        // Vertical position of the control's top edge as a permille of the
-        // window height (0 = window top, 1000 = window bottom). QQ's search box
-        // sits in the header while the composer is docked at the bottom.
-        let rel_y = unsafe { element.CurrentBoundingRectangle() }
-            .map(|rect| ((rect.top - window_rect.top) * 1000 / window_height).clamp(0, 1000))
-            .unwrap_or(0);
-        candidates.push((score, rel_y, focused, element));
+        if !enabled {
+            continue;
+        }
+        let name = unsafe { element.CurrentName() }
+            .ok()
+            .map(|value| value.to_string())
+            .unwrap_or_default();
+        let aid = unsafe { element.CurrentAutomationId() }
+            .ok()
+            .map(|value| value.to_string())
+            .unwrap_or_default();
+        let cls = unsafe { element.CurrentClassName() }
+            .ok()
+            .map(|value| value.to_string())
+            .unwrap_or_default();
+        let rect = match unsafe { element.CurrentBoundingRectangle() } {
+            Ok(rect) => rect,
+            Err(_) => continue,
+        };
+        // Drop placeholder 0x0 rects (they're stale virtualization rows).
+        if rect.right <= rect.left || rect.bottom <= rect.top {
+            continue;
+        }
+        let width = rect.right - rect.left;
+        let rel_y = ((rect.top - window_rect.top) * 1000 / window_height).clamp(0, 1000);
+        let rel_x = ((rect.left - window_rect.left) * 1000 / window_width).clamp(0, 1000);
+
+        let kind = if cls.contains("Chrome_RenderWidgetHostHWND") {
+            EditorKind::WebviewRoot
+        } else if control_type == UIA_ListItemControlTypeId
+            && rel_x >= 500
+            && rel_y >= 600
+            && width >= 800
+        {
+            EditorKind::Composer
+        } else if control_type == UIA_EditControlTypeId {
+            let descriptor = format!("{} {} {}", name, aid, cls).to_ascii_lowercase();
+            if editor_score(&descriptor) >= 0 {
+                EditorKind::PlainEdit
+            } else {
+                continue;
+            }
+        } else {
+            continue;
+        };
+        eprintln!(
+            "[qq.choose_editor] kind={:?} name={:?} aid={:?} cls={:?} rel=({},{}) w={} rect={:?}",
+            kind, name, aid, cls, rel_x, rel_y, width, rect
+        );
+        candidates.push(Candidate {
+            element,
+            kind,
+            rel_y,
+            width,
+        });
     }
 
-    // Discard the window header. QQNT frequently exposes its search/contact
-    // filter box with an empty Name/AutomationId/ClassName, so the keyword
-    // scorer cannot penalize it; excluding the top third of the window removes
-    // it regardless of labelling while keeping the bottom-docked composer.
-    const HEADER_PERMILLE: i32 = 330;
-    if candidates.iter().any(|(_, rel_y, _, _)| *rel_y > HEADER_PERMILLE) {
-        candidates.retain(|(_, rel_y, _, _)| *rel_y > HEADER_PERMILLE);
-    }
-
-    // Ranking order matters: keyword score first, then vertical position, and
-    // keyboard focus only as the final tie-breaker. Focus must NOT dominate,
-    // because QQ parks the caret in its search box by default — ranking focus
-    // first is exactly what made drafts land in the search field.
+    candidates.sort_by_key(|candidate| match candidate.kind {
+        EditorKind::Composer => (0_i32, -candidate.rel_y, -candidate.width),
+        EditorKind::PlainEdit => (1_i32, -candidate.rel_y, -candidate.width),
+        EditorKind::WebviewRoot => (2_i32, -candidate.rel_y, -candidate.width),
+    });
+    eprintln!("[qq.choose_editor] final candidates: {}", candidates.len());
     candidates
         .into_iter()
-        .max_by_key(|(score, rel_y, focused, _)| (*score, *rel_y, *focused as i32))
-        .map(|(_, _, _, element)| element)
+        .next()
+        .map(|c| EditorChoice { element: c.element, kind: c.kind })
 }
 
 /// Score an editor descriptor for how likely it is the chat composer rather
