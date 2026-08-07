@@ -42,21 +42,6 @@
         "visible": true,
         "focus": false,
         "shadow": false
-      },
-      {
-        "label": "ime",
-        "title": "灵犀输入",
-        "url": "ime.html",
-        "width": 720,
-        "height": 92,
-        "resizable": false,
-        "decorations": false,
-        "transparent": true,
-        "alwaysOnTop": true,
-        "skipTaskbar": true,
-        "visible": false,
-        "focus": false,
-        "shadow": false
       }
     ],
     "security": {

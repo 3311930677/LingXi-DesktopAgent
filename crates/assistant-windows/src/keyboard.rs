@@ -106,7 +106,11 @@ pub(crate) fn click_at(x: i32, y: i32) -> Result<(), AdapterError> {
     let abs_x = ((x as i64 * 65535) / screen_w as i64) as i32;
     let abs_y = ((y as i64 * 65535) / screen_h as i64) as i32;
 
-    let move_and_down = mouse_input_abs(abs_x, abs_y, MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_LEFTDOWN);
+    let move_and_down = mouse_input_abs(
+        abs_x,
+        abs_y,
+        MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_LEFTDOWN,
+    );
     let up = mouse_input_abs(0, 0, MOUSEEVENTF_LEFTUP);
     send_all_mouse(&[move_and_down, up])?;
     // Let the focus event propagate through Chromium's accessibility tree
@@ -115,7 +119,11 @@ pub(crate) fn click_at(x: i32, y: i32) -> Result<(), AdapterError> {
     Ok(())
 }
 
-fn mouse_input_abs(dx: i32, dy: i32, flags: windows::Win32::UI::Input::KeyboardAndMouse::MOUSE_EVENT_FLAGS) -> INPUT {
+fn mouse_input_abs(
+    dx: i32,
+    dy: i32,
+    flags: windows::Win32::UI::Input::KeyboardAndMouse::MOUSE_EVENT_FLAGS,
+) -> INPUT {
     INPUT {
         r#type: INPUT_MOUSE,
         Anonymous: INPUT_0 {

@@ -18,7 +18,6 @@ dirs = "5"
 assistant-core = { path = "../../crates/assistant-core" }
 assistant-windows = { path = "../../crates/assistant-windows" }
 assistant-inference = { path = "../../crates/assistant-inference" }
-assistant-ime = { path = "../../crates/assistant-ime" }
 windows = { version = "0.58", features = [
     "Win32_Foundation",
     "Win32_Graphics_Gdi",

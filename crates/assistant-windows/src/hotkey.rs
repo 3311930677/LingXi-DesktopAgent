@@ -9,7 +9,7 @@
 
 use assistant_core::AdapterError;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    RegisterHotKey, UnregisterHotKey, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, VK_BACK, VK_I, VK_SPACE,
+    RegisterHotKey, UnregisterHotKey, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, VK_BACK, VK_SPACE,
 };
 use windows::Win32::UI::WindowsAndMessaging::{GetMessageW, MSG, WM_HOTKEY};
 
@@ -18,15 +18,12 @@ use crate::error::platform;
 /// Identifier for our single hotkey registration.
 const HOTKEY_ID: i32 = 1;
 const UNDO_HOTKEY_ID: i32 = 2;
-const IME_HOTKEY_ID: i32 = 3;
 
 /// Commands emitted by the full assistant hotkey loop.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AssistantHotkey {
     Transform,
     Undo,
-    /// Toggle the pinyin IME candidate panel.
-    Ime,
 }
 
 /// Register `Ctrl+Alt+Space` and pump messages, invoking `on_trigger` on each
@@ -74,12 +71,6 @@ pub fn run_assistant_hotkey_loop<F: FnMut(AssistantHotkey)>(
         let _ = unsafe { UnregisterHotKey(None, HOTKEY_ID) };
         return Err(platform("RegisterHotKey(Ctrl+Alt+Backspace)", error));
     }
-    if let Err(error) = unsafe { RegisterHotKey(None, IME_HOTKEY_ID, modifiers, VK_I.0 as u32) } {
-        let _ = unsafe { UnregisterHotKey(None, UNDO_HOTKEY_ID) };
-        let _ = unsafe { UnregisterHotKey(None, HOTKEY_ID) };
-        return Err(platform("RegisterHotKey(Ctrl+Alt+I)", error));
-    }
-
     let mut msg = MSG::default();
     loop {
         let ret = unsafe { GetMessageW(&mut msg, None, 0, 0) };
@@ -90,13 +81,11 @@ pub fn run_assistant_hotkey_loop<F: FnMut(AssistantHotkey)>(
             match msg.wParam.0 as i32 {
                 HOTKEY_ID => on_command(AssistantHotkey::Transform),
                 UNDO_HOTKEY_ID => on_command(AssistantHotkey::Undo),
-                IME_HOTKEY_ID => on_command(AssistantHotkey::Ime),
                 _ => {}
             }
         }
     }
 
-    let _ = unsafe { UnregisterHotKey(None, IME_HOTKEY_ID) };
     let _ = unsafe { UnregisterHotKey(None, UNDO_HOTKEY_ID) };
     let _ = unsafe { UnregisterHotKey(None, HOTKEY_ID) };
     Ok(())

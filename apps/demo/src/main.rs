@@ -40,7 +40,6 @@ fn main() {
                 transform(&adapter, transformer.as_ref(), &mut last_receipt)
             }
             AssistantHotkey::Undo => undo(&adapter, &mut last_receipt),
-            AssistantHotkey::Ime => {} // IME handled only in the overlay
         }
     });
 

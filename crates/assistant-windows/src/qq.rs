@@ -204,11 +204,13 @@ pub fn qq_write_draft(draft: &str) -> Result<bool, AdapterError> {
     match chosen.kind {
         EditorKind::PlainEdit => {
             // SAFETY: this is an enabled Edit in the foreground QQ window.
-            unsafe { chosen.element.SetFocus() }
-                .map_err(|error| AdapterError::Platform(format!("QQ editor SetFocus failed: {error}")))?;
+            unsafe { chosen.element.SetFocus() }.map_err(|error| {
+                AdapterError::Platform(format!("QQ editor SetFocus failed: {error}"))
+            })?;
             sleep(Duration::from_millis(80));
 
-            if let Some(value) = get_pattern::<IUIAutomationValuePattern>(&chosen.element, UIA_ValuePatternId)
+            if let Some(value) =
+                get_pattern::<IUIAutomationValuePattern>(&chosen.element, UIA_ValuePatternId)
             {
                 unsafe { value.SetValue(&BSTR::from(draft)) }.map_err(|error| {
                     AdapterError::Platform(format!("QQ editor SetValue failed: {error}"))
@@ -458,10 +460,10 @@ fn choose_editor(
         EditorKind::WebviewRoot => (2_i32, -candidate.rel_y, -candidate.width),
     });
     eprintln!("[qq.choose_editor] final candidates: {}", candidates.len());
-    candidates
-        .into_iter()
-        .next()
-        .map(|c| EditorChoice { element: c.element, kind: c.kind })
+    candidates.into_iter().next().map(|c| EditorChoice {
+        element: c.element,
+        kind: c.kind,
+    })
 }
 
 /// Score an editor descriptor for how likely it is the chat composer rather
