@@ -6,10 +6,13 @@ use std::time::{Duration, Instant};
 
 use assistant_core::AdapterError;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetAsyncKeyState, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP,
-    KEYEVENTF_UNICODE, VIRTUAL_KEY, VK_A, VK_C, VK_CONTROL, VK_DELETE, VK_LCONTROL, VK_LMENU,
-    VK_LSHIFT, VK_LWIN, VK_MENU, VK_RCONTROL, VK_RMENU, VK_RSHIFT, VK_RWIN, VK_SHIFT, VK_V, VK_Z,
+    GetAsyncKeyState, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT,
+    KEYEVENTF_KEYUP, KEYEVENTF_UNICODE, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_LEFTDOWN,
+    MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MOVE, MOUSEINPUT, VIRTUAL_KEY, VK_A, VK_C, VK_CONTROL,
+    VK_DELETE, VK_LCONTROL, VK_LMENU, VK_LSHIFT, VK_LWIN, VK_MENU, VK_RCONTROL, VK_RMENU,
+    VK_RSHIFT, VK_RWIN, VK_SHIFT, VK_V, VK_Z,
 };
+use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN};
 
 /// Modifier keys that could still be physically held when a hotkey fires and
 /// would otherwise contaminate our injected shortcuts (e.g. a lingering Alt
@@ -84,6 +87,63 @@ pub(crate) fn delete_selection() -> Result<(), AdapterError> {
         key_input(VK_DELETE, 0, KEYEVENTF_KEYUP),
     ];
     send_all(&inputs)
+}
+
+/// Move the cursor to (x, y) in screen coordinates and perform a single left
+/// click. Used by the QQ write path to drive the caret into the Chromium
+/// composer when UIA cannot identify the editable element directly: QQNT only
+/// renders the composer's accessibility node after it receives focus, so we
+/// click on its physical location (computed from the QQ window bounds) and
+/// then use Ctrl+A / Ctrl+V to replace its contents.
+pub(crate) fn click_at(x: i32, y: i32) -> Result<(), AdapterError> {
+    // Convert screen pixels to the absolute coordinate space SendInput expects
+    // (0..65535 mapped across the full primary monitor). Doing the move and
+    // click in a single SendInput batch avoids the cursor visibly dwelling at
+    // the old position.
+    // SAFETY: GetSystemMetrics only reads a system-wide int.
+    let screen_w = unsafe { GetSystemMetrics(SM_CXSCREEN) }.max(1);
+    let screen_h = unsafe { GetSystemMetrics(SM_CYSCREEN) }.max(1);
+    let abs_x = ((x as i64 * 65535) / screen_w as i64) as i32;
+    let abs_y = ((y as i64 * 65535) / screen_h as i64) as i32;
+
+    let move_and_down = mouse_input_abs(abs_x, abs_y, MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_LEFTDOWN);
+    let up = mouse_input_abs(0, 0, MOUSEEVENTF_LEFTUP);
+    send_all_mouse(&[move_and_down, up])?;
+    // Let the focus event propagate through Chromium's accessibility tree
+    // before the caller injects Ctrl+A / Ctrl+V.
+    sleep(Duration::from_millis(120));
+    Ok(())
+}
+
+fn mouse_input_abs(dx: i32, dy: i32, flags: windows::Win32::UI::Input::KeyboardAndMouse::MOUSE_EVENT_FLAGS) -> INPUT {
+    INPUT {
+        r#type: INPUT_MOUSE,
+        Anonymous: INPUT_0 {
+            mi: MOUSEINPUT {
+                dx,
+                dy,
+                mouseData: 0,
+                dwFlags: flags,
+                time: 0,
+                dwExtraInfo: 0,
+            },
+        },
+    }
+}
+
+fn send_all_mouse(inputs: &[INPUT]) -> Result<(), AdapterError> {
+    if inputs.is_empty() {
+        return Ok(());
+    }
+    // SAFETY: `inputs` is a valid contiguous INPUT array and cbSize matches.
+    let sent = unsafe { SendInput(inputs, size_of::<INPUT>() as i32) };
+    if sent as usize != inputs.len() {
+        return Err(AdapterError::Platform(format!(
+            "SendInput(mouse) sent {sent}/{} events",
+            inputs.len()
+        )));
+    }
+    Ok(())
 }
 
 /// Type arbitrary UTF-16 text into the active selection using KEYEVENTF_UNICODE.

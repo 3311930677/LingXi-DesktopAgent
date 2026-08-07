@@ -588,6 +588,15 @@ el.applyBtn.addEventListener("click", apply);
 el.undoBtn.addEventListener("click", undo);
 el.closeBtn.addEventListener("click", close);
 el.pinBtn.addEventListener("click", () => el.pinBtn.classList.toggle("is-on"));
+const quitBtn = document.getElementById("quit-btn");
+if (quitBtn) {
+  quitBtn.addEventListener("click", () => {
+    if (confirm("确定退出灵犀？退出后桌宠和快捷键都会关闭。")) {
+      if (invoke) invoke("quit_app").catch(() => {});
+      else window.close();
+    }
+  });
+}
 el.rewriteTab.addEventListener("click", () => showView("rewrite"));
 el.qqTab.addEventListener("click", () => { showView("qq"); readQqMessage(); });
 el.settingsBtn.addEventListener("click", () => { showView("settings"); loadSettings(); });

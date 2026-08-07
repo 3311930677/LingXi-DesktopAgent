@@ -545,6 +545,15 @@ fn hide_overlay(app: AppHandle, state: State<AppState>) {
     *state.pet_status.lock().unwrap() = "idle".into();
 }
 
+/// Quit the entire LingXi process (called by the "退出灵犀" button).
+/// Unlike `hide_overlay` which only hides the panel, this fully exits the
+/// application so the user does not need to find the hidden tray icon or use
+/// Task Manager.
+#[tauri::command]
+fn quit_app(app: AppHandle) {
+    app.exit(0);
+}
+
 /// Explicitly begin a native window drag. This custom command bypasses the
 /// window-plugin permission path used by `data-tauri-drag-region`, which is
 /// unreliable for a non-activating WebView window.
@@ -1166,16 +1175,19 @@ fn on_ime(app: &AppHandle) {
 /// background. The tray icon reuses the bundled window icon so there is no
 /// extra asset to ship.
 fn install_tray(app: &AppHandle) -> tauri::Result<()> {
+    eprintln!("[lingxi] install_tray: creating menu...");
     let show_panel = MenuItem::with_id(app, "tray:show", "显示面板", true, None::<&str>)?;
     let hide_panel = MenuItem::with_id(app, "tray:hide", "隐藏面板", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "tray:quit", "退出灵犀", true, None::<&str>)?;
     let separator = PredefinedMenuItem::separator(app)?;
     let menu = Menu::with_items(app, &[&show_panel, &hide_panel, &separator, &quit])?;
+    eprintln!("[lingxi] install_tray: menu created, getting icon...");
     let icon = app
         .default_window_icon()
         .cloned()
         .ok_or_else(|| tauri::Error::AssetNotFound("default window icon".into()))?;
-    TrayIconBuilder::with_id("lingxi-tray")
+    eprintln!("[lingxi] install_tray: icon ok, building tray...");
+    let _tray = TrayIconBuilder::with_id("lingxi-tray")
         .icon(icon)
         .tooltip("灵犀 · L3 跨应用 AI 助手")
         .menu(&menu)
@@ -1208,6 +1220,7 @@ fn install_tray(app: &AppHandle) -> tauri::Result<()> {
             }
         })
         .build(app)?;
+    eprintln!("[lingxi] install_tray: tray built successfully");
     Ok(())
 }
 
@@ -1231,7 +1244,8 @@ fn main() {
             set_panel_focusable,
             qq_poll_latest,
             generate_qq_draft,
-            write_qq_draft
+            write_qq_draft,
+            quit_app
         ])
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {
