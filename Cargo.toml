@@ -6,6 +6,7 @@ members = [
     "crates/assistant-windows",
     "crates/tools",
     "crates/lingxi-agent",
+    "crates/tools-windows",
     "apps/probe",
     "apps/watch",
     "apps/demo",

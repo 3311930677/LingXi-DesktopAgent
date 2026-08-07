@@ -126,6 +126,17 @@ fn restore_text(backup: Option<&str>) -> Result<(), AdapterError> {
     }
 }
 
+/// Read the current clipboard text. Returns an empty string if the clipboard
+/// does not contain text (e.g. it holds an image).
+pub fn read_clipboard_text() -> Result<String, AdapterError> {
+    read_unicode_text()
+}
+
+/// Set the clipboard to the given text, replacing any previous content.
+pub fn write_clipboard_text(text: &str) -> Result<(), AdapterError> {
+    write_unicode_text(text)
+}
+
 fn read_unicode_text() -> Result<String, AdapterError> {
     let _open = OpenClipboardGuard::acquire()?;
     // SAFETY: clipboard is open; handle stays clipboard-owned.
