@@ -127,7 +127,7 @@ pub fn qq_latest_message() -> Result<QqMessageSnapshot, AdapterError> {
         };
         let rel_x = ((rect.left - window_rect.left) * 1000 / window_width).clamp(0, 1000);
         let rel_y = ((rect.top - window_rect.top) * 1000 / window_height).clamp(0, 1000);
-        if rel_x < 400 || !(100..=700).contains(&rel_y) {
+        if rel_x < 700 || !(100..=700).contains(&rel_y) {
             continue;
         }
         let name = unsafe { element.CurrentName() }
@@ -333,8 +333,37 @@ fn is_message_candidate(text: &str, window_title: &str) -> bool {
         || text.chars().count() > MAX_MESSAGE_CHARS
         || matches!(
             text,
-            "发送" | "表情" | "截图" | "文件" | "语音" | "视频" | "更多" | "搜索"
+            "发送"
+                | "表情"
+                | "截图"
+                | "文件"
+                | "语音"
+                | "视频"
+                | "更多"
+                | "搜索"
+                | "群公告"
+                | "群聊成员"
+                | "群主"
+                | "模板参考"
+                | "图片"
+                | "【图片】"
         )
+    {
+        return false;
+    }
+    // Reject pure timestamps (HH:MM, 星期X HH:MM, etc). These are message
+    // metadata, not content.
+    let stripped = text.replace(|c: char| c.is_ascii_punctuation() || c.is_whitespace(), "");
+    if stripped.len() <= 6 && stripped.chars().all(|c| c.is_ascii_digit() || c == ':') {
+        return false;
+    }
+    // Reject "星期X HH:MM" style timestamps that include a weekday prefix.
+    if text.starts_with("星期")
+        && text
+            .chars()
+            .filter(|c| c.is_ascii_digit() || *c == ':')
+            .count()
+            >= 3
     {
         return false;
     }
@@ -502,6 +531,12 @@ mod tests {
         assert!(!is_message_candidate("发送", "张三"));
         assert!(!is_message_candidate("张三", "张三"));
         assert!(!is_message_candidate("...", "张三"));
+        // New: reject group UI labels and pure timestamps.
+        assert!(!is_message_candidate("群公告", "张三"));
+        assert!(!is_message_candidate("群聊成员", "张三"));
+        assert!(!is_message_candidate("15:49", "张三"));
+        assert!(!is_message_candidate("星期二 17:05", "张三"));
+        assert!(!is_message_candidate("【图片】", "张三"));
     }
 
     #[test]
