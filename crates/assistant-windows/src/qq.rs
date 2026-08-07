@@ -148,7 +148,7 @@ pub fn qq_write_draft(draft: &str) -> Result<bool, AdapterError> {
     let client = UiaClient::new()?;
     let root = client.element_from_hwnd(foreground.hwnd)?;
     let elements = client.descendants(&root)?;
-    let editor = choose_editor(elements).ok_or(AdapterError::UnsupportedControl)?;
+    let editor = choose_editor(elements, &root).ok_or(AdapterError::UnsupportedControl)?;
 
     // SAFETY: this is an enabled, keyboard-focusable Edit element in the
     // foreground QQ window. Focusing does not activate any other application.
@@ -267,7 +267,18 @@ fn is_message_candidate(text: &str, window_title: &str) -> bool {
         .any(|ch| ch.is_alphanumeric() || ('\u{4e00}'..='\u{9fff}').contains(&ch))
 }
 
-fn choose_editor(elements: Vec<IUIAutomationElement>) -> Option<IUIAutomationElement> {
+fn choose_editor(
+    elements: Vec<IUIAutomationElement>,
+    window: &IUIAutomationElement,
+) -> Option<IUIAutomationElement> {
+    // Window bounds are needed to reason about *relative* vertical position.
+    // `CurrentBoundingRectangle` returns screen coordinates, so a raw pixel
+    // threshold is meaningless: it depends on where the QQ window happens to
+    // sit on the desktop (and on DPI). Normalising against the window makes the
+    // "search box is at the top, composer is at the bottom" rule reliable.
+    let window_rect = unsafe { window.CurrentBoundingRectangle() }.ok()?;
+    let window_height = (window_rect.bottom - window_rect.top).max(1);
+
     let mut candidates = Vec::new();
     for element in elements {
         if unsafe { element.CurrentControlType() }.ok() != Some(UIA_EditControlTypeId) {
@@ -305,27 +316,31 @@ fn choose_editor(elements: Vec<IUIAutomationElement>) -> Option<IUIAutomationEle
         let focused = unsafe { element.CurrentHasKeyboardFocus() }
             .ok()
             .is_some_and(|value| value.as_bool());
-        // Vertical position tie-breaker: QQ's message composer always sits at
-        // the bottom of the window while the search box is at the very top. When
-        // neither editor holds focus (the usual case, since the LingXi panel
-        // stole it) and keyword scores tie, the lower control is the composer.
-        // Using the full height (bottom) rather than just `top` makes the
-        // composer win even when QQ's search box has a non-zero top inset.
-        let bottom = unsafe { element.CurrentBoundingRectangle() }
-            .map(|rect| rect.bottom)
+        // Vertical position of the control's top edge as a permille of the
+        // window height (0 = window top, 1000 = window bottom). QQ's search box
+        // sits in the header while the composer is docked at the bottom.
+        let rel_y = unsafe { element.CurrentBoundingRectangle() }
+            .map(|rect| ((rect.top - window_rect.top) * 1000 / window_height).clamp(0, 1000))
             .unwrap_or(0);
-        candidates.push((focused, score, bottom, element));
+        candidates.push((score, rel_y, focused, element));
     }
-    // Drop controls sitting in the top strip entirely. QQ's top search/contact
-    // filter box always lives in the first ~120px of the window, and its
-    // AutomationId/Name are frequently empty on QQNT, so the keyword scorer
-    // cannot penalize it. Excluding the top strip makes the composer win
-    // regardless of how QQ labels its search box.
-    const SEARCH_STRIP_HEIGHT: i32 = 120;
-    candidates.retain(|(_, _, bottom, _)| *bottom > SEARCH_STRIP_HEIGHT);
+
+    // Discard the window header. QQNT frequently exposes its search/contact
+    // filter box with an empty Name/AutomationId/ClassName, so the keyword
+    // scorer cannot penalize it; excluding the top third of the window removes
+    // it regardless of labelling while keeping the bottom-docked composer.
+    const HEADER_PERMILLE: i32 = 330;
+    if candidates.iter().any(|(_, rel_y, _, _)| *rel_y > HEADER_PERMILLE) {
+        candidates.retain(|(_, rel_y, _, _)| *rel_y > HEADER_PERMILLE);
+    }
+
+    // Ranking order matters: keyword score first, then vertical position, and
+    // keyboard focus only as the final tie-breaker. Focus must NOT dominate,
+    // because QQ parks the caret in its search box by default — ranking focus
+    // first is exactly what made drafts land in the search field.
     candidates
         .into_iter()
-        .max_by_key(|(focused, score, bottom, _)| (*focused as usize, *score, *bottom))
+        .max_by_key(|(score, rel_y, focused, _)| (*score, *rel_y, *focused as i32))
         .map(|(_, _, _, element)| element)
 }
 
