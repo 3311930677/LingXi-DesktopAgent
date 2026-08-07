@@ -73,6 +73,12 @@ pub struct Session {
     pub working_dir: std::path::PathBuf,
 }
 
+impl Default for Session {
+    fn default() -> Self {
+        Self::new("default", ".")
+    }
+}
+
 impl Session {
     pub fn new(id: impl Into<String>, working_dir: impl Into<std::path::PathBuf>) -> Self {
         Self {

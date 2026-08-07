@@ -25,11 +25,13 @@ use std::time::Duration;
 use assistant_core::{
     diff_chars, transformer_by_name, DiffOp, InputAdapter, SelectionSnapshot, WriteReceipt,
 };
-use assistant_inference::{CloudBackend, CloudConfig, LocalBackend, ModelBackend, ModelTask};
+use assistant_inference::{CloudAgentBackend, CloudBackend, CloudConfig, LocalBackend, ModelBackend, ModelTask};
 use assistant_windows::{
     capture_qq_selection_text, qq_write_draft, remember_foreground_if_qq, resolve_qq_window,
     run_assistant_hotkey_loop, wait_for_trigger_release, AssistantHotkey, WindowsAdapter,
 };
+use lingxi_agent::{AgentBackend, AgentEngine, Session};
+use lingxi_tools::{AutoConfirm, ConfirmGate, RiskLevel, ToolRegistry};
 use serde::{Deserialize, Serialize};
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
@@ -118,6 +120,10 @@ struct AppState {
     /// Once the user drags the panel, preserve that preferred position instead
     /// of snapping it back beside the cursor on every invocation.
     user_positioned: AtomicBool,
+    /// Agent tool registry, initialized with all Windows tools at startup.
+    tool_registry: std::sync::Mutex<ToolRegistry>,
+    /// Agent conversation session, persists across messages within a session.
+    agent_session: std::sync::Mutex<Session>,
 }
 
 impl Default for AppState {
@@ -131,6 +137,15 @@ impl Default for AppState {
             last_qq_message: Mutex::new(None),
             selection_revision: AtomicU64::new(0),
             user_positioned: AtomicBool::new(false),
+            tool_registry: std::sync::Mutex::new({
+                let mut reg = ToolRegistry::new();
+                lingxi_tools_windows::register_default_tools(&mut reg);
+                reg
+            }),
+            agent_session: std::sync::Mutex::new(Session::new(
+                uuid::Uuid::new_v4().to_string(),
+                dirs::home_dir().unwrap_or_default(),
+            )),
         }
     }
 }
@@ -435,6 +450,101 @@ async fn write_qq_draft(draft: String) -> Result<DraftWriteResult, String> {
         .map_err(|error| format!("QQ write task failed: {error}"))?
         .map_err(|error| error.to_string())?;
     Ok(DraftWriteResult { verified })
+}
+
+// ---------------------------------------------------------------------------
+// Agent commands
+// ---------------------------------------------------------------------------
+
+/// A tool's metadata for the frontend.
+#[derive(Serialize)]
+struct ToolView {
+    name: String,
+    description: String,
+    risk_level: String,
+    enabled: bool,
+}
+
+/// Send a message to the agent and get a reply. The agent may call tools
+/// internally before replying. Requires a configured cloud backend.
+#[tauri::command]
+async fn agent_chat(
+    state: State<'_, AppState>,
+    message: String,
+) -> Result<String, String> {
+    let settings = state.backend.lock().unwrap().clone();
+    if settings.endpoint.is_empty() || settings.api_key.is_empty() {
+        return Err("请先在设置页配置云端模型的 Endpoint 和 API Key。".into());
+    }
+
+    let config = CloudConfig {
+        endpoint: settings.endpoint.clone(),
+        model: settings.model.clone(),
+        api_key: settings.api_key.clone(),
+    };
+    let backend = CloudAgentBackend::new(config);
+    let backend_box: Box<dyn AgentBackend> = Box::new(backend);
+
+    // Build a fresh registry for this run — tools are stateless, so this is
+    // cheap. We copy the user's enabled/disabled state from the stored registry.
+    let mut registry = ToolRegistry::new();
+    lingxi_tools_windows::register_default_tools(&mut registry);
+    {
+        let reg = state.tool_registry.lock().unwrap();
+        for schema in reg.all_schemas() {
+            if !reg.is_enabled(&schema.name) {
+                registry.set_enabled(&schema.name, false);
+            }
+        }
+    }
+
+    let engine = AgentEngine::new(backend_box, std::sync::Arc::new(registry));
+    let confirm = std::sync::Arc::new(AutoConfirm) as std::sync::Arc<dyn ConfirmGate>;
+
+    // Take the session out of the Mutex so we can hold it across .await
+    // without the MutexGuard blocking Send.
+    let mut session = std::mem::take(&mut *state.agent_session.lock().unwrap());
+    let result = engine.run(&message, &mut session, confirm).await;
+    // Put the session back regardless of success/failure.
+    *state.agent_session.lock().unwrap() = session;
+
+    result.map_err(|e| e.to_string())
+}
+
+/// Reset the agent conversation session (start a new chat).
+#[tauri::command]
+fn agent_reset(state: State<AppState>) -> Result<(), String> {
+    *state.agent_session.lock().unwrap() = Session::new(
+        uuid::Uuid::new_v4().to_string(),
+        dirs::home_dir().unwrap_or_default(),
+    );
+    Ok(())
+}
+
+/// List all registered tools with their metadata.
+#[tauri::command]
+fn list_tools(state: State<AppState>) -> Vec<ToolView> {
+    let reg = state.tool_registry.lock().unwrap();
+    reg.all_schemas()
+        .iter()
+        .map(|s| {
+            let risk = reg.risk_of(&s.name).unwrap_or(RiskLevel::Safe);
+            ToolView {
+                name: s.name.clone(),
+                description: s.description.clone(),
+                risk_level: format!("{:?}", risk).to_lowercase(),
+                enabled: reg.is_enabled(&s.name),
+            }
+        })
+        .collect()
+}
+
+/// Enable or disable a tool by name.
+#[tauri::command]
+fn toggle_tool(state: State<AppState>, name: String, enabled: bool) -> Result<(), String> {
+    let mut reg = state.tool_registry.lock().unwrap();
+    reg.set_enabled(&name, enabled);
+    Ok(())
 }
 
 #[derive(Serialize)]
@@ -1287,7 +1397,11 @@ fn main() {
             capture_qq_selection,
             generate_qq_draft,
             write_qq_draft,
-            quit_app
+            quit_app,
+            agent_chat,
+            agent_reset,
+            list_tools,
+            toggle_tool
         ])
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {
