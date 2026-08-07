@@ -887,6 +887,10 @@ fn chat_completions_url(endpoint: &str) -> String {
     }
 }
 
+mod agent_cloud;
+
+pub use agent_cloud::CloudAgentBackend;
+
 /// A local prompt-enhancement transformer. The pluggable backend API above is
 /// preferred by the overlay; this adapter keeps compatibility with the
 /// platform's existing synchronous [`Transformer`] pipeline.

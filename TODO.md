@@ -25,3 +25,4 @@
 - [ ] 拆分 app.js (26KB) 为模块
 - [ ] eprintln → log crate
 - [ ] 创建 CLAUDE.md
+- [ ] 修复 assistant-inference tests::long_rewrite_guard_rejects_truncation 失败（预存问题，validate_output 截断检测阈值）

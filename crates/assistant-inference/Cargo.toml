@@ -8,9 +8,13 @@ description = "On-device model text transformer (candle + Qwen2.5) implementing 
 
 [dependencies]
 assistant-core = { path = "../assistant-core" }
+lingxi-agent = { path = "../lingxi-agent" }
+lingxi-tools = { path = "../tools" }
 anyhow = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+async-trait = "0.1"
+tokio = { version = "1", features = ["rt"] }
 
 # Pure-Rust CPU inference stack. No cmake/C/C++ toolchain required, matching the
 # rest of this project. GPU/MKL/CUDA features are intentionally left off.
