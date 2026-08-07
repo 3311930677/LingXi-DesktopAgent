@@ -126,7 +126,7 @@ pub fn qq_latest_message() -> Result<QqMessageSnapshot, AdapterError> {
         };
         let rel_x = ((rect.left - window_rect.left) * 1000 / window_width).clamp(0, 1000);
         let rel_y = ((rect.top - window_rect.top) * 1000 / window_height).clamp(0, 1000);
-        if rel_x < 400 || rel_y < 100 || rel_y > 700 {
+        if rel_x < 400 || !(100..=700).contains(&rel_y) {
             continue;
         }
         // Prefer the node's full text via TextPattern/ValuePattern: QQ is a
