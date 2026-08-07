@@ -1,3 +1,7 @@
 [toolchain]
-channel = "stable"
+# Use MSVC for the entire workspace. The GNU toolchain on this machine lacks
+# `dlltool.exe`, which tokio's transitive `windows-sys` dependency needs at
+# link time. MSVC is also required by Tauri (apps/overlay) and candle
+# (assistant-inference), so standardizing on MSVC eliminates the split.
+channel = "stable-x86_64-pc-windows-msvc"
 components = ["rustfmt", "clippy"]
