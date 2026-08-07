@@ -481,17 +481,34 @@ async function saveSettings() {
 
 async function readQqMessage() {
   if (!invoke) return;
+  // First check QQ is foreground so we can show a friendly error instead of
+  // capturing a selection from some other application.
   try {
-    const result = await invoke("qq_poll_latest");
-    if (!result) {
+    const poll = await invoke("qq_poll_latest");
+    if (!poll) {
       showStatus("请先把 QQ 聊天窗口切到前台", "warn");
       return;
     }
+    el.qqConversation.textContent = poll.conversation || "QQ 会话";
+  } catch (e) {
+    showStatus("QQ 状态检查失败: " + e, "err");
+    return;
+  }
+  // Now read the user's current selection. The user must have selected the
+  // message they want to reply to before clicking this button.
+  try {
+    showLoading("正在读取选区…", false);
+    const result = await invoke("capture_qq_selection");
+    hideLoading(false);
     qqMessage = result.message;
     el.qqConversation.textContent = result.conversation || "QQ 会话";
     el.qqMessage.textContent = result.message;
+    if (result.message) {
+      showStatus("已读取选中消息，可生成回复草稿", "ok");
+    }
   } catch (e) {
-    showStatus("读取 QQ 失败: " + e, "err");
+    hideLoading(false);
+    showStatus("读取失败: " + e + "（请先在 QQ 里选中对方消息）", "err");
   }
 }
 

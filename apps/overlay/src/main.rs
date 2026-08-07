@@ -27,7 +27,7 @@ use assistant_core::{
 };
 use assistant_inference::{CloudBackend, CloudConfig, LocalBackend, ModelBackend, ModelTask};
 use assistant_windows::{
-    qq_latest_message, qq_write_draft, remember_foreground_if_qq, run_assistant_hotkey_loop,
+    foreground_info, qq_write_draft, remember_foreground_if_qq, run_assistant_hotkey_loop,
     wait_for_trigger_release, AssistantHotkey, WindowsAdapter,
 };
 use serde::{Deserialize, Serialize};
@@ -110,6 +110,7 @@ struct AppState {
     last_preview: Mutex<Option<CachedPreview>>,
     backend: Mutex<BackendSettings>,
     pet_status: Mutex<String>,
+    #[allow(dead_code)]
     last_qq_message: Mutex<Option<String>>,
     /// Incremented for every successful hotkey capture, even when the selected
     /// text is identical to the previous capture.
@@ -338,27 +339,55 @@ fn toggle_panel(app: AppHandle) -> Result<bool, String> {
     }
 }
 
-/// Poll the foreground QQ accessibility tree. Non-QQ foreground windows return
-/// `None`, so background polling stays quiet and never reads other applications.
+/// Check whether QQ is the foreground window, and if so return the active
+/// conversation title (the chat partner's display name). The caller (UI) then
+/// asks the user to select the message they want to reply to and calls
+/// `capture_qq_selection` to read it via the standard Win32 selection API.
+///
+/// This intentionally does NOT scan QQ's UIA tree: QQNT (Chromium / Electron)
+/// does not expose sender identity per bubble, so any "auto-read latest
+/// message" attempt ends up mixing own messages, the contact list preview,
+/// and group member rosters. Reading the user's explicit selection is the
+/// only reliable source of truth for "which message to reply to".
 #[tauri::command]
-async fn qq_poll_latest(state: State<'_, AppState>) -> Result<Option<QqMessageView>, String> {
-    let snapshot = tauri::async_runtime::spawn_blocking(qq_latest_message)
+async fn qq_poll_latest(_state: State<'_, AppState>) -> Result<Option<QqMessageView>, String> {
+    let info = tauri::async_runtime::spawn_blocking(foreground_info)
         .await
-        .map_err(|error| format!("QQ scan task failed: {error}"))?;
-    let Ok(snapshot) = snapshot else {
-        return Ok(None);
+        .map_err(|e| format!("foreground probe failed: {e}"))?;
+    let info = match info {
+        Ok(info) if is_qq_foreground(&info.process_name) => info,
+        _ => return Ok(None),
     };
-    let mut previous = state.last_qq_message.lock().unwrap();
-    let is_new = previous.as_ref() != Some(&snapshot.message);
-    if is_new {
-        *previous = Some(snapshot.message.clone());
-        *state.pet_status.lock().unwrap() = "alert".into();
-    }
+    let conversation = info.title.clone();
     Ok(Some(QqMessageView {
-        conversation: snapshot.conversation,
-        message: snapshot.message,
-        is_new,
+        conversation,
+        message: String::new(),
+        is_new: false,
     }))
+}
+
+/// Capture the user's current text selection inside QQ. The user must select
+/// the message they want to reply to (double-click or drag-select) before
+/// calling this. Returns the selected text verbatim.
+#[tauri::command]
+async fn capture_qq_selection(_state: State<'_, AppState>) -> Result<QqMessageView, String> {
+    let snapshot = tauri::async_runtime::spawn_blocking(|| {
+        let adapter = WindowsAdapter::new();
+        adapter.capture_selection()
+    })
+    .await
+    .map_err(|e| format!("selection capture failed: {e}"))?
+    .map_err(|e| format!("selection capture: {e}"))?;
+    let message = snapshot.selected_text.trim().to_string();
+    if message.is_empty() {
+        return Err("没有选中文字。请在 QQ 里双击或拖选对方的消息后再试。".into());
+    }
+    let info = foreground_info().map_err(|e| format!("foreground probe: {e}"))?;
+    Ok(QqMessageView {
+        conversation: info.title,
+        message,
+        is_new: true,
+    })
 }
 
 #[tauri::command]
@@ -588,6 +617,12 @@ fn start_window_resize(window: WebviewWindow) -> Result<(), String> {
 /// Continuously remember the last foreground QQ window so the panel's "read"
 /// and "write draft" buttons still target QQ after the panel takes focus. This
 /// is a cheap Win32-only poll (no COM/UIA), safe to run at a modest cadence.
+/// Whether a process image name is a QQ client (QQ.exe or QQNT.exe).
+fn is_qq_foreground(process_name: &str) -> bool {
+    let p = process_name.to_ascii_lowercase();
+    p == "qq.exe" || p == "qqnt.exe"
+}
+
 fn spawn_qq_foreground_sampler() {
     thread::spawn(|| loop {
         remember_foreground_if_qq();
@@ -1243,6 +1278,7 @@ fn main() {
             toggle_panel,
             set_panel_focusable,
             qq_poll_latest,
+            capture_qq_selection,
             generate_qq_draft,
             write_qq_draft,
             quit_app

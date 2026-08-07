@@ -12,8 +12,8 @@ use assistant_core::AdapterError;
 use windows::core::BSTR;
 use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::Accessibility::{
-    IUIAutomationElement, IUIAutomationValuePattern, UIA_DocumentControlTypeId,
-    UIA_EditControlTypeId, UIA_ListItemControlTypeId, UIA_TextControlTypeId, UIA_ValuePatternId,
+    IUIAutomationElement, IUIAutomationValuePattern, UIA_EditControlTypeId,
+    UIA_ListItemControlTypeId, UIA_ValuePatternId,
 };
 use windows::Win32::UI::WindowsAndMessaging::{IsWindow, SetForegroundWindow};
 
@@ -24,6 +24,7 @@ use crate::keyboard;
 use crate::read::{get_pattern, read_full_text};
 use crate::uia::UiaClient;
 
+#[allow(dead_code)]
 const MAX_MESSAGE_CHARS: usize = 2_000;
 
 /// Handle of the most recent foreground window that belonged to QQ.
@@ -92,90 +93,15 @@ pub struct QqMessageSnapshot {
 /// so this deliberately uses semantic control types rather than private class
 /// names. Failure is explicit; callers should keep polling instead of treating
 /// unrelated foreground windows as conversations.
+/// Deprecated: scanning QQNT's UIA tree cannot reliably identify the sender
+/// of a message bubble, so this function is no longer used by the overlay.
+/// The UI now reads the user's explicit selection instead. Kept as a stub so
+/// downstream code linking against the assistant-windows crate still compiles.
+#[allow(dead_code)]
 pub fn qq_latest_message() -> Result<QqMessageSnapshot, AdapterError> {
-    let foreground = resolve_qq_window()?;
-    let _com = ComGuard::new()?;
-    let client = UiaClient::new()?;
-    let root = client.element_from_hwnd(foreground.hwnd)?;
-    let window_rect = unsafe { root.CurrentBoundingRectangle() }
-        .map_err(|e| AdapterError::Platform(format!("window rect: {e}")))?;
-    let window_width = (window_rect.right - window_rect.left).max(1);
-    let window_height = (window_rect.bottom - window_rect.top).max(1);
-    let elements = client.descendants(&root)?;
-
-    let mut candidates = Vec::new();
-    let mut diag_count = 0;
-    for element in &elements {
-        let control_type = match unsafe { element.CurrentControlType() } {
-            Ok(value) => value,
-            Err(_) => continue,
-        };
-        if control_type != UIA_TextControlTypeId
-            && control_type != UIA_DocumentControlTypeId
-            && control_type != UIA_ListItemControlTypeId
-        {
-            continue;
-        }
-        // Restrict to the message pane: right half of the window, vertically
-        // between the title bar and the composer (input area). Everything else
-        // (left contact list, header buttons, composer itself) is excluded so
-        // a header button or the active contact's name is never mistaken for
-        // the latest message.
-        let rect = match unsafe { element.CurrentBoundingRectangle() } {
-            Ok(rect) if rect.right > rect.left && rect.bottom > rect.top => rect,
-            _ => continue,
-        };
-        let rel_x = ((rect.left - window_rect.left) * 1000 / window_width).clamp(0, 1000);
-        let rel_y = ((rect.top - window_rect.top) * 1000 / window_height).clamp(0, 1000);
-        if rel_x < 700 || !(100..=700).contains(&rel_y) {
-            continue;
-        }
-        let name = unsafe { element.CurrentName() }
-            .ok()
-            .map(|value| value.to_string())
-            .unwrap_or_default();
-        let cls = unsafe { element.CurrentClassName() }
-            .ok()
-            .map(|value| value.to_string())
-            .unwrap_or_default();
-        // Prefer the node's full text via TextPattern/ValuePattern: QQ is a
-        // Chromium client whose message bubbles expose their complete content
-        // there, while `Name` is frequently a truncated label. Fall back to
-        // `Name` only when neither pattern is available.
-        let text = element_text(element).unwrap_or_default();
-        let text = text.trim();
-        if diag_count < 25 {
-            eprintln!(
-                "[qq.read] ct={:?} rel=({},{}) name={:?} cls={:?} text_len={} text_head={:?}",
-                control_type,
-                rel_x,
-                rel_y,
-                name,
-                cls,
-                text.chars().count(),
-                text.chars().take(40).collect::<String>()
-            );
-            diag_count += 1;
-        }
-        if is_message_candidate(text, &foreground.title) {
-            candidates.push((rel_y, text.to_string()));
-        }
-    }
-
-    // Sort by vertical position so the trailing-run join walks from the
-    // bottom of the message pane upward. A single logical message is often
-    // split across several adjacent text nodes in the Chromium accessibility
-    // tree (one per line/segment), and QQ does not guarantee a stable order
-    // when the bubbles are virtualised.
-    candidates.sort_by_key(|(rel_y, _)| std::cmp::Reverse(*rel_y));
-    let candidates: Vec<String> = candidates.into_iter().map(|(_, text)| text).collect();
-    let message = join_trailing_message(&candidates)
-        .ok_or_else(|| AdapterError::Platform("QQ message text was not exposed by UIA".into()))?;
-    Ok(QqMessageSnapshot {
-        hwnd: foreground.hwnd,
-        conversation: foreground.title,
-        message,
-    })
+    Err(AdapterError::Platform(
+        "qq_latest_message is deprecated; use capture_qq_selection instead".into(),
+    ))
 }
 
 /// Put a confirmed draft into the foreground QQ edit control without sending.
@@ -259,6 +185,7 @@ pub fn qq_write_draft(draft: &str) -> Result<bool, AdapterError> {
 /// their real content there. `Name` is used only as a last resort because it is
 /// frequently a truncated label, which is what previously limited reads to "a
 /// few characters".
+#[allow(dead_code)]
 fn element_text(element: &IUIAutomationElement) -> Option<String> {
     if let Ok(Some(text)) = read_full_text(element) {
         let text = text.trim();
@@ -279,6 +206,7 @@ fn element_text(element: &IUIAutomationElement) -> Option<String> {
 /// last node, joining them with newlines so a multi-line message is returned
 /// whole. The run stops once it has gathered a reasonable amount of text so an
 /// unrelated earlier bubble is not merged in.
+#[allow(dead_code)]
 fn join_trailing_message(candidates: &[String]) -> Option<String> {
     if candidates.is_empty() {
         return None;
@@ -326,6 +254,7 @@ fn is_qq_process(process_name: &str) -> bool {
     process == "qq.exe" || process == "qqnt.exe"
 }
 
+#[allow(dead_code)]
 fn is_message_candidate(text: &str, window_title: &str) -> bool {
     let text = text.trim();
     if text.is_empty()
