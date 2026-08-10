@@ -15,9 +15,11 @@ use std::sync::Arc;
 
 /// Register all default Windows tools into a registry.
 pub fn register_default_tools(registry: &mut ToolRegistry) {
-    // UIA / selection tools
-    registry.register(Arc::new(uia_tools::ReadSelectionTool));
-    registry.register(Arc::new(uia_tools::WriteTextTool));
+    // Generic UIA selection/write tools are intentionally not registered yet:
+    // while the Agent panel owns focus they would operate on the prompt box
+    // rather than the user's previous application. They will be enabled after
+    // target-window tracking is implemented. QQ has an explicit remembered
+    // window and is therefore safe to expose below.
 
     // QQ integration
     registry.register(Arc::new(qq_tools::QqReadSelectionTool));
@@ -34,4 +36,10 @@ pub fn register_default_tools(registry: &mut ToolRegistry) {
 
     // Shell
     registry.register(Arc::new(shell_tools::RunCommandTool));
+
+    // High-impact tools stay unavailable until the UI has collected an
+    // explicit per-invocation approval. This prevents a model from writing
+    // files or executing commands merely because a global toggle was left on.
+    registry.set_enabled("write_file", false);
+    registry.set_enabled("run_command", false);
 }

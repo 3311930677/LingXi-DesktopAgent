@@ -42,16 +42,23 @@ impl ToolRegistry {
 
     /// All registered tool schemas (including disabled ones, for UI display).
     pub fn all_schemas(&self) -> Vec<ToolSchema> {
-        self.tools.values().map(|t| t.schema()).collect()
+        let mut schemas: Vec<_> = self.tools.values().map(|tool| tool.schema()).collect();
+        schemas.sort_by(|a, b| a.name.cmp(&b.name));
+        schemas
     }
 
-    /// Only enabled tool schemas, for sending to the LLM.
+    /// Only enabled tool schemas, for sending to the LLM. The stable name
+    /// ordering keeps prompts deterministic across runs despite HashMap's
+    /// randomized iteration order.
     pub fn enabled_schemas(&self) -> Vec<ToolSchema> {
-        self.tools
+        let mut schemas: Vec<_> = self
+            .tools
             .iter()
             .filter(|(name, _)| self.is_enabled(name))
-            .map(|(_, t)| t.schema())
-            .collect()
+            .map(|(_, tool)| tool.schema())
+            .collect();
+        schemas.sort_by(|a, b| a.name.cmp(&b.name));
+        schemas
     }
 
     /// Get the risk level of a tool, if it exists.
@@ -167,10 +174,7 @@ mod tests {
         let mut registry = ToolRegistry::new();
         registry.register(Arc::new(DangerousTool));
         let ctx = ToolContext::deny_all(".");
-        let result = registry
-            .execute("run_cmd", json!({}), &ctx)
-            .await
-            .unwrap();
+        let result = registry.execute("run_cmd", json!({}), &ctx).await.unwrap();
         assert!(!result.success);
         assert!(result.output.contains("取消"));
     }

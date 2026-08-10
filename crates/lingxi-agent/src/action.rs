@@ -10,6 +10,9 @@ use serde_json::Value;
 pub enum AgentAction {
     /// The model wants to invoke a tool.
     CallTool {
+        /// Provider-assigned call id. It must be echoed on the subsequent
+        /// `role=tool` message for OpenAI-compatible APIs.
+        id: String,
         name: String,
         arguments: Value,
         /// Optional reasoning text the model produced alongside the call.
@@ -25,6 +28,7 @@ pub enum AgentAction {
 /// A recorded tool call in the session history.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolCall {
+    pub id: String,
     pub name: String,
     pub arguments: Value,
     pub result: String,

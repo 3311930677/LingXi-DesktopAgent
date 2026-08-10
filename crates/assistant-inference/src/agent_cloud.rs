@@ -56,25 +56,8 @@ fn build_payload(
     messages: &[Message],
     tools: &[ToolSchema],
 ) -> serde_json::Value {
-    let messages_json: Vec<serde_json::Value> = messages
-        .iter()
-        .map(|m| {
-            let role = match m.role {
-                lingxi_agent::session::Role::System => "system",
-                lingxi_agent::session::Role::User => "user",
-                lingxi_agent::session::Role::Assistant => "assistant",
-                lingxi_agent::session::Role::Tool => "tool",
-            };
-            let mut obj = json!({
-                "role": role,
-                "content": m.content,
-            });
-            if let Some(ref name) = m.tool_name {
-                obj["name"] = json!(name);
-            }
-            obj
-        })
-        .collect();
+    let messages_json: Vec<serde_json::Value> =
+        messages.iter().map(Message::to_openai_json).collect();
 
     let tools_json: Vec<serde_json::Value> = tools
         .iter()
@@ -132,6 +115,12 @@ fn parse_response(body: &serde_json::Value) -> Result<AgentAction, AgentError> {
     // Check for tool_calls (function calling).
     if let Some(tool_calls) = choice.get("tool_calls").and_then(|v| v.as_array()) {
         if let Some(first_call) = tool_calls.first() {
+            let id = first_call
+                .get("id")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| AgentError::Backend("tool_call missing id".into()))?
+                .to_string();
+
             let name = first_call
                 .pointer("/function/name")
                 .and_then(|v| v.as_str())
@@ -153,6 +142,7 @@ fn parse_response(body: &serde_json::Value) -> Result<AgentAction, AgentError> {
                 .map(|s| s.to_string());
 
             return Ok(AgentAction::CallTool {
+                id,
                 name,
                 arguments,
                 thought,
@@ -199,10 +189,12 @@ mod tests {
         let action = parse_response(&body).unwrap();
         match action {
             AgentAction::CallTool {
+                id,
                 name,
                 arguments,
                 thought,
             } => {
+                assert_eq!(id, "call_001");
                 assert_eq!(name, "read_selection");
                 assert_eq!(arguments["mode"], "full");
                 assert_eq!(thought.as_deref(), Some("让我先读取选区"));

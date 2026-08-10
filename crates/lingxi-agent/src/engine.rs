@@ -1,15 +1,32 @@
 //! The agent engine: orchestrates the think → act → observe loop.
 
-use crate::action::AgentAction;
+use crate::action::{AgentAction, ToolCall};
 use crate::backend::AgentBackend;
 use crate::error::AgentError;
 use crate::session::Session;
 use lingxi_tools::{ConfirmGate, ToolContext, ToolRegistry};
 use std::sync::Arc;
 
+const DEFAULT_SYSTEM_PROMPT: &str = r#"你是灵犀，一个运行在用户 Windows 桌面上的 AI 协作助手。
+
+工作原则：
+1. 优先理解用户真实目标，必要时组合多个工具完成任务。
+2. 只调用完成当前任务所必需的工具；工具失败时根据返回结果调整，不要假装成功。
+3. 不要自动发送聊天消息；QQ 工具只写草稿，由用户最终确认发送。
+4. 文件写入、命令执行等危险能力可能被安全策略禁用，遇到拒绝时明确说明并给出安全替代方案。
+5. 最终回复简洁说明结果、改动位置和用户需要继续做的事。"#;
+
+/// Detailed result of one agent turn, including every tool invocation for UI
+/// rendering and auditability.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct AgentRunReport {
+    pub reply: String,
+    pub tool_calls: Vec<ToolCall>,
+}
+
 /// The agent engine. Holds a backend (model) and a tool registry.
 ///
-/// The main method is [`AgentEngine::run` which executes the ReAct loop:
+/// The main method is [`AgentEngine::run`] which executes the ReAct loop:
 /// ask the model → if it wants a tool, execute it → feed the result back →
 /// repeat until the model replies or the step limit is reached.
 pub struct AgentEngine {
@@ -32,15 +49,29 @@ impl AgentEngine {
         self
     }
 
-    /// Run one round of conversation. The user input is added to the session,
-    /// then the engine loops until the model replies or asks a question.
+    /// Run one round of conversation and return only the final reply.
     pub async fn run(
         &self,
         user_input: &str,
         session: &mut Session,
         confirm: Arc<dyn ConfirmGate>,
     ) -> Result<String, AgentError> {
+        self.run_with_trace(user_input, session, confirm)
+            .await
+            .map(|report| report.reply)
+    }
+
+    /// Run one round and retain a structured audit trail of tool calls.
+    pub async fn run_with_trace(
+        &self,
+        user_input: &str,
+        session: &mut Session,
+        confirm: Arc<dyn ConfirmGate>,
+    ) -> Result<AgentRunReport, AgentError> {
+        session.ensure_system(DEFAULT_SYSTEM_PROMPT);
         session.push_user(user_input);
+        session.trim_history(40);
+        let mut trace = Vec::new();
 
         for _step in 0..self.max_steps {
             let action = self
@@ -49,23 +80,33 @@ impl AgentEngine {
                 .await?;
 
             match action {
-                AgentAction::Reply(text) => {
+                AgentAction::Reply(text) | AgentAction::AskUser(text) => {
                     session.push_assistant(&text);
-                    return Ok(text);
-                }
-                AgentAction::AskUser(question) => {
-                    session.push_assistant(&question);
-                    return Ok(question);
+                    return Ok(AgentRunReport {
+                        reply: text,
+                        tool_calls: trace,
+                    });
                 }
                 AgentAction::CallTool {
+                    id,
                     name,
                     arguments,
                     thought,
                 } => {
-                    // Log the assistant's thought + tool call.
-                    if let Some(t) = &thought {
-                        session.push_assistant(t);
-                    }
+                    // Persist the exact assistant tool call before executing it.
+                    // OpenAI-compatible APIs require this message immediately
+                    // before the role=tool result carrying the same call id.
+                    let protocol_call = ToolCall {
+                        id: id.clone(),
+                        name: name.clone(),
+                        arguments: arguments.clone(),
+                        result: String::new(),
+                        success: false,
+                    };
+                    session.push_assistant_with_tools(
+                        thought.unwrap_or_default(),
+                        vec![protocol_call],
+                    );
 
                     let ctx = ToolContext {
                         session_id: session.id.clone(),
@@ -73,12 +114,18 @@ impl AgentEngine {
                         confirm: confirm.clone(),
                     };
 
-                    let result = match self.registry.execute(&name, arguments, &ctx).await {
-                        Some(r) => r,
+                    let result = match self.registry.execute(&name, arguments.clone(), &ctx).await {
+                        Some(result) => result,
                         None => lingxi_tools::ToolResult::err(format!("未知工具: {name}")),
                     };
-
-                    session.push_tool_result(&name, &result.output);
+                    session.push_tool_result(&id, &name, &result.output);
+                    trace.push(ToolCall {
+                        id,
+                        name,
+                        arguments,
+                        result: result.output,
+                        success: result.success,
+                    });
                 }
             }
         }
@@ -164,6 +211,7 @@ mod tests {
 
         let backend = MockBackend::new(vec![
             AgentAction::CallTool {
+                id: "call_echo_1".into(),
                 name: "echo".into(),
                 arguments: json!({"text": "hello world"}),
                 thought: Some("我需要回显这段文字".into()),
@@ -174,14 +222,25 @@ mod tests {
         let engine = AgentEngine::new(Box::new(backend), Arc::new(registry));
         let mut session = Session::new("test", ".");
 
-        let reply = engine
-            .run("echo hello world", &mut session, Arc::new(AutoConfirm) as Arc<dyn ConfirmGate>)
+        let report = engine
+            .run_with_trace(
+                "echo hello world",
+                &mut session,
+                Arc::new(AutoConfirm) as Arc<dyn ConfirmGate>,
+            )
             .await
             .unwrap();
 
-        assert_eq!(reply, "工具返回了: hello world");
-        // user + thought + tool_result + assistant_reply = 4 messages
-        assert_eq!(session.messages.len(), 4);
+        assert_eq!(report.reply, "工具返回了: hello world");
+        assert_eq!(report.tool_calls.len(), 1);
+        assert_eq!(report.tool_calls[0].id, "call_echo_1");
+        assert_eq!(report.tool_calls[0].result, "hello world");
+        assert!(report.tool_calls[0].success);
+        // system + user + assistant_tool_call + tool_result + reply = 5 messages
+        assert_eq!(session.messages.len(), 5);
+        let json = session.messages_json();
+        assert_eq!(json[2]["tool_calls"][0]["id"], "call_echo_1");
+        assert_eq!(json[3]["tool_call_id"], "call_echo_1");
     }
 
     #[tokio::test]
@@ -194,13 +253,17 @@ mod tests {
         let mut session = Session::new("test", ".");
 
         let reply = engine
-            .run("你好", &mut session, Arc::new(AutoConfirm) as Arc<dyn ConfirmGate>)
+            .run(
+                "你好",
+                &mut session,
+                Arc::new(AutoConfirm) as Arc<dyn ConfirmGate>,
+            )
             .await
             .unwrap();
 
         assert_eq!(reply, "直接回答");
-        // user + assistant_reply = 2 messages
-        assert_eq!(session.messages.len(), 2);
+        // system + user + assistant_reply = 3 messages
+        assert_eq!(session.messages.len(), 3);
     }
 
     #[tokio::test]
@@ -211,7 +274,9 @@ mod tests {
         // Every step calls the tool, never replies.
         let backend = MockBackend::new(
             (0..20)
-                .map(|_| AgentAction::CallTool {
+                .enumerate()
+                .map(|(index, _)| AgentAction::CallTool {
+                    id: format!("call_loop_{index}"),
                     name: "echo".into(),
                     arguments: json!({"text": "loop"}),
                     thought: None,
@@ -222,7 +287,13 @@ mod tests {
         let engine = AgentEngine::new(Box::new(backend), Arc::new(registry)).with_max_steps(3);
         let mut session = Session::new("test", ".");
 
-        let result = engine.run("loop", &mut session, Arc::new(AutoConfirm) as Arc<dyn ConfirmGate>).await;
+        let result = engine
+            .run(
+                "loop",
+                &mut session,
+                Arc::new(AutoConfirm) as Arc<dyn ConfirmGate>,
+            )
+            .await;
         assert!(matches!(result, Err(AgentError::MaxStepsExceeded(3))));
     }
 }

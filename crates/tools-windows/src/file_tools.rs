@@ -31,16 +31,12 @@ impl Tool for ReadFileTool {
             None => return ToolResult::err("缺少 path 参数"),
         };
 
-        let full = resolve_path(path, &ctx.working_dir);
+        let full = match resolve_existing_path(path, &ctx.working_dir) {
+            Ok(path) => path,
+            Err(error) => return ToolResult::err(error),
+        };
         match tokio::fs::read_to_string(&full).await {
-            Ok(content) => {
-                let truncated = if content.len() > 50_000 {
-                    format!("{}\n\n...(文件已截断，共 {} 字节)", &content[..50_000], content.len())
-                } else {
-                    content
-                };
-                ToolResult::ok(truncated)
-            }
+            Ok(content) => ToolResult::ok(truncate_utf8(&content, 50_000)),
             Err(e) => ToolResult::err(format!("读取文件失败: {e}")),
         }
     }
@@ -80,7 +76,10 @@ impl Tool for WriteFileTool {
             None => return ToolResult::err("缺少 content 参数"),
         };
 
-        let full = resolve_path(path, &ctx.working_dir);
+        let full = match resolve_write_path(path, &ctx.working_dir) {
+            Ok(path) => path,
+            Err(error) => return ToolResult::err(error),
+        };
         match tokio::fs::write(&full, content).await {
             Ok(()) => ToolResult::ok(format!("已写入 {}", full.display())),
             Err(e) => ToolResult::err(format!("写入文件失败: {e}")),
@@ -107,12 +106,12 @@ impl Tool for ListDirTool {
     }
 
     async fn execute(&self, params: serde_json::Value, ctx: &ToolContext) -> ToolResult {
-        let path = params
-            .get("path")
-            .and_then(|v| v.as_str())
-            .unwrap_or(".");
+        let path = params.get("path").and_then(|v| v.as_str()).unwrap_or(".");
 
-        let full = resolve_path(path, &ctx.working_dir);
+        let full = match resolve_existing_path(path, &ctx.working_dir) {
+            Ok(path) => path,
+            Err(error) => return ToolResult::err(error),
+        };
         let mut entries = match tokio::fs::read_dir(&full).await {
             Ok(e) => e,
             Err(e) => return ToolResult::err(format!("读取目录失败: {e}")),
@@ -121,11 +120,7 @@ impl Tool for ListDirTool {
         let mut items = Vec::new();
         while let Ok(Some(entry)) = entries.next_entry().await {
             let name = entry.file_name().to_string_lossy().to_string();
-            let is_dir = entry
-                .file_type()
-                .await
-                .map(|t| t.is_dir())
-                .unwrap_or(false);
+            let is_dir = entry.file_type().await.map(|t| t.is_dir()).unwrap_or(false);
             items.push(json!({"name": name, "is_dir": is_dir}));
         }
 
@@ -140,19 +135,82 @@ impl Tool for ListDirTool {
             })
         });
 
-        ToolResult::ok_with_data(
-            format!("共 {} 项", items.len()),
-            json!(items),
-        )
+        ToolResult::ok_with_data(format!("共 {} 项", items.len()), json!(items))
     }
 }
 
-/// Resolve a path relative to the working directory if not absolute.
-fn resolve_path(path: &str, working_dir: &Path) -> std::path::PathBuf {
-    let p = std::path::Path::new(path);
-    if p.is_absolute() {
-        p.to_path_buf()
+/// Truncate a string at a valid UTF-8 boundary and add a useful notice.
+fn truncate_utf8(content: &str, max_bytes: usize) -> String {
+    if content.len() <= max_bytes {
+        return content.to_string();
+    }
+    let mut end = max_bytes.min(content.len());
+    while !content.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!(
+        "{}\n\n...(文件已截断，共 {} 字节)",
+        &content[..end],
+        content.len()
+    )
+}
+
+/// Resolve an existing path and confine it to the session working directory.
+/// This prevents a model from reading credentials or system files elsewhere on
+/// disk through an absolute path or `..` traversal.
+fn resolve_existing_path(path: &str, working_dir: &Path) -> Result<std::path::PathBuf, String> {
+    let root = working_dir
+        .canonicalize()
+        .map_err(|e| format!("无法解析工作目录: {e}"))?;
+    let requested = if Path::new(path).is_absolute() {
+        Path::new(path).to_path_buf()
     } else {
-        working_dir.join(p)
+        root.join(path)
+    };
+    let resolved = requested
+        .canonicalize()
+        .map_err(|e| format!("路径不存在或无法访问: {e}"))?;
+    if !resolved.starts_with(&root) {
+        return Err(format!(
+            "安全策略拒绝访问工作目录之外的路径（工作目录: {}）",
+            root.display()
+        ));
+    }
+    Ok(resolved)
+}
+
+/// Resolve a write target by validating its existing parent directory.
+fn resolve_write_path(path: &str, working_dir: &Path) -> Result<std::path::PathBuf, String> {
+    let requested = if Path::new(path).is_absolute() {
+        Path::new(path).to_path_buf()
+    } else {
+        working_dir.join(path)
+    };
+    let file_name = requested
+        .file_name()
+        .ok_or_else(|| "写入路径必须包含文件名".to_string())?;
+    let parent = requested
+        .parent()
+        .ok_or_else(|| "无法解析写入路径的父目录".to_string())?;
+    let safe_parent = resolve_existing_path(parent.to_string_lossy().as_ref(), working_dir)?;
+    Ok(safe_parent.join(file_name))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn truncate_utf8_never_splits_multibyte_character() {
+        let content = "你好吗abc";
+        let truncated = truncate_utf8(content, 4);
+        assert!(truncated.starts_with('你'));
+        assert!(!truncated.starts_with("你好"));
+        assert!(truncated.contains("文件已截断"));
+    }
+
+    #[test]
+    fn short_text_is_unchanged() {
+        assert_eq!(truncate_utf8("hello", 10), "hello");
     }
 }

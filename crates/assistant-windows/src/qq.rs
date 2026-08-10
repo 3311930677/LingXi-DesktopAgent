@@ -13,8 +13,8 @@ use windows::core::BSTR;
 use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::Accessibility::{
     IUIAutomationElement, IUIAutomationTextPattern, IUIAutomationTextRange,
-    IUIAutomationValuePattern, UIA_EditControlTypeId, UIA_ListItemControlTypeId,
-    UIA_TextPatternId, UIA_ValuePatternId,
+    IUIAutomationValuePattern, UIA_EditControlTypeId, UIA_ListItemControlTypeId, UIA_TextPatternId,
+    UIA_ValuePatternId,
 };
 use windows::Win32::UI::WindowsAndMessaging::{IsWindow, SetForegroundWindow};
 

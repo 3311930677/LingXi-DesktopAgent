@@ -14,8 +14,9 @@ impl Tool for QqReadSelectionTool {
     fn schema(&self) -> ToolSchema {
         ToolSchema {
             name: "qq_read_selection".into(),
-            description: "读取QQ中用户当前选中的消息文字。用户需要先在QQ聊天窗口中双击或拖选一条消息。"
-                .into(),
+            description:
+                "读取QQ中用户当前选中的消息文字。用户需要先在QQ聊天窗口中双击或拖选一条消息。"
+                    .into(),
             parameters: json!({"type": "object", "properties": {}}),
         }
     }

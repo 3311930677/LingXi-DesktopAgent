@@ -13,6 +13,6 @@ pub mod session;
 
 pub use action::{AgentAction, ToolCall};
 pub use backend::AgentBackend;
-pub use engine::AgentEngine;
+pub use engine::{AgentEngine, AgentRunReport};
 pub use error::AgentError;
 pub use session::{Message, Role, Session};

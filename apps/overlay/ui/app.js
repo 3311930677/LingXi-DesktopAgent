@@ -47,6 +47,7 @@ const el = {
   endpointInput: document.getElementById("endpoint-input"),
   modelInput: document.getElementById("model-input"),
   apiKeyInput: document.getElementById("api-key-input"),
+  rememberApiKey: document.getElementById("remember-api-key"),
   keyNote: document.getElementById("key-note"),
   saveSettings: document.getElementById("save-settings"),
   resizeGrip: document.getElementById("resize-grip"),
@@ -55,10 +56,23 @@ const el = {
   progressTime: document.getElementById("progress-time"),
   progressBar: document.getElementById("progress-bar"),
   progressDetail: document.getElementById("progress-detail"),
+  // Agent chat
+  agentTab: document.getElementById("agent-tab"),
+  agentView: document.getElementById("agent-view"),
+  chatMessages: document.getElementById("chat-messages"),
+  chatInput: document.getElementById("chat-input"),
+  chatSend: document.getElementById("chat-send"),
+  agentReset: document.getElementById("agent-reset"),
+  // Tools
+  toolsTab: document.getElementById("tools-tab"),
+  toolsView: document.getElementById("tools-view"),
+  toolsList: document.getElementById("tools-list"),
+  toolsCount: document.getElementById("tools-count"),
 };
 
 let qqMessage = "";
 let currentBackend = "local";
+let agentHistoryLoaded = false;
 
 // Browser-only examples for visual preview. Real transformations always come
 // from the selected local/cloud model through Tauri.
@@ -409,14 +423,20 @@ function showView(view) {
   el.rewriteActions.hidden = !rewrite;
   el.qqView.hidden = view !== "qq";
   el.settingsPanel.hidden = view !== "settings";
+  el.agentView.hidden = view !== "agent";
+  el.toolsView.hidden = view !== "tools";
   el.modes.hidden = !rewrite;
-  for (const tab of [el.rewriteTab, el.qqTab, el.settingsBtn]) tab.classList.remove("is-active");
-  ({ rewrite: el.rewriteTab, qq: el.qqTab, settings: el.settingsBtn })[view].classList.add("is-active");
+  const tabs = [el.rewriteTab, el.qqTab, el.agentTab, el.toolsTab, el.settingsBtn];
+  for (const tab of tabs) tab.classList.remove("is-active");
+  const map = { rewrite: el.rewriteTab, qq: el.qqTab, agent: el.agentTab, tools: el.toolsTab, settings: el.settingsBtn };
+  if (map[view]) map[view].classList.add("is-active");
   // The rewrite panel must stay non-activating so write-back's focus-drift
-  // check passes; settings/QQ need real keyboard focus for their text fields.
+  // check passes; settings/QQ/agent/tools need real keyboard focus.
   if (invoke) {
     invoke("set_panel_focusable", { focusable: !rewrite }).catch(() => {});
   }
+  if (view === "tools") loadTools();
+  if (view === "agent") loadAgentHistory();
 }
 
 async function loadSettings() {
@@ -428,10 +448,13 @@ async function loadSettings() {
     el.backendSelect.value = settings.backend;
     el.endpointInput.value = settings.endpoint;
     el.modelInput.value = settings.model;
+    el.rememberApiKey.checked = Boolean(settings.remember_api_key);
     el.backendBadge.textContent = settings.backend === "cloud" ? "云端" : "本地";
     el.keyNote.textContent = settings.api_key_configured
-      ? "API Key 已配置（仅本次运行内存中；留空可保持不变）。"
-      : "密钥不会写入配置文件；也可用 LINGXI_OPENAI_API_KEY 环境变量。";
+      ? settings.remember_api_key
+        ? "API Key 已由当前 Windows 账户加密保存；留空可保持不变。"
+        : "API Key 已配置（仅本次运行内存中；留空可保持不变）。"
+      : "未配置 API Key；也可使用 LINGXI_OPENAI_API_KEY 环境变量。";
   } catch (e) {
     showStatus("读取设置失败: " + e, "err");
   }
@@ -467,6 +490,7 @@ async function saveSettings() {
       endpoint: el.endpointInput.value,
       model: el.modelInput.value,
       api_key: el.apiKeyInput.value,
+      remember_api_key: el.rememberApiKey.checked,
     }});
     el.apiKeyInput.value = "";
     currentBackend = settings.backend;
@@ -615,14 +639,168 @@ if (quitBtn) {
     }
   });
 }
+// ---- Agent chat ----
+
+async function loadAgentHistory() {
+  if (!invoke || agentHistoryLoaded) return;
+  try {
+    const history = await invoke("agent_history");
+    agentHistoryLoaded = true;
+    if (!history.length) return;
+    el.chatMessages.replaceChildren();
+    for (const item of history) appendChatBubble(item.role, item.content);
+  } catch (err) {
+    showStatus("加载对话历史失败: " + err, "err");
+  }
+}
+
+function appendChatBubble(role, text) {
+  const empty = el.chatMessages.querySelector(".chat-empty");
+  if (empty) empty.remove();
+  const bubble = document.createElement("div");
+  bubble.className = "chat-bubble chat-" + role;
+  bubble.textContent = text;
+  el.chatMessages.appendChild(bubble);
+  el.chatMessages.scrollTop = el.chatMessages.scrollHeight;
+}
+
+function appendToolCall(call) {
+  const card = document.createElement("details");
+  card.className = "chat-tool-card " + (call.success ? "tool-success" : "tool-failed");
+  const summary = document.createElement("summary");
+  const state = call.success ? "完成" : "未执行";
+  summary.textContent = `${call.name} · ${state}`;
+  const body = document.createElement("div");
+  body.className = "chat-tool-body";
+  const args = document.createElement("pre");
+  args.textContent = JSON.stringify(call.arguments || {}, null, 2);
+  const result = document.createElement("div");
+  result.className = "chat-tool-result";
+  result.textContent = call.result || "（无输出）";
+  body.append(args, result);
+  card.append(summary, body);
+  el.chatMessages.appendChild(card);
+}
+
+async function sendChatMessage() {
+  const msg = el.chatInput.value.trim();
+  if (!msg) return;
+  el.chatInput.value = "";
+  appendChatBubble("user", msg);
+  // Show a thinking indicator
+  const thinking = document.createElement("div");
+  thinking.className = "chat-bubble chat-assistant chat-thinking";
+  thinking.textContent = "思考中…";
+  el.chatMessages.appendChild(thinking);
+  el.chatMessages.scrollTop = el.chatMessages.scrollHeight;
+  el.chatSend.disabled = true;
+  try {
+    if (!invoke) {
+      thinking.textContent = "（浏览器预览模式，无法调用模型）";
+      return;
+    }
+    const report = await invoke("agent_chat", { message: msg });
+    thinking.remove();
+    for (const call of report.tool_calls || []) appendToolCall(call);
+    appendChatBubble("assistant", report.reply || "（模型未返回文字）");
+  } catch (err) {
+    thinking.remove();
+    const message = String(err);
+    appendChatBubble("error", message);
+    if (message.includes("云端模型") || message.includes("Endpoint 和 API Key")) {
+      const openSettings = document.createElement("button");
+      openSettings.className = "mini-btn chat-settings-link";
+      openSettings.textContent = "打开模型设置";
+      openSettings.addEventListener("click", () => {
+        showView("settings");
+        loadSettings();
+      });
+      el.chatMessages.appendChild(openSettings);
+    }
+  } finally {
+    el.chatSend.disabled = false;
+    el.chatInput.focus();
+  }
+}
+
+async function resetAgentChat() {
+  if (!invoke) return;
+  try {
+    await invoke("agent_reset");
+    agentHistoryLoaded = true;
+    el.chatMessages.innerHTML = '<div class="chat-empty">新对话已开始。向灵犀描述你想做的事…</div>';
+  } catch (err) {
+    showStatus("重置失败: " + err, "err");
+  }
+}
+
+// ---- Tools management ----
+
+async function loadTools() {
+  if (!invoke) return;
+  try {
+    const tools = await invoke("list_tools");
+    renderTools(tools);
+  } catch (err) {
+    el.toolsList.innerHTML = '<div class="tools-error">加载失败: ' + err + "</div>";
+  }
+}
+
+function renderTools(tools) {
+  el.toolsCount.textContent = tools.length;
+  if (!tools.length) {
+    el.toolsList.innerHTML = '<div class="tools-empty">没有已注册的工具</div>';
+    return;
+  }
+  const riskColors = { safe: "#4ade80", moderate: "#fbbf24", dangerous: "#f87171" };
+  const riskLabels = { safe: "安全", moderate: "中等", dangerous: "危险" };
+  el.toolsList.innerHTML = tools
+    .map(
+      (t) => `
+      <div class="tool-card${t.enabled ? "" : " disabled"}">
+        <div class="tool-info">
+          <span class="tool-name">${t.name}</span>
+          <span class="tool-risk risk-${t.risk_level}" style="color:${riskColors[t.risk_level] || "#888"}">${riskLabels[t.risk_level] || t.risk_level}</span>
+        </div>
+        <div class="tool-desc">${t.description}</div>
+        <label class="tool-toggle"><input type="checkbox" ${t.enabled ? "checked" : ""} ${t.risk_level === "dangerous" ? "disabled" : ""} data-tool="${t.name}"> ${t.risk_level === "dangerous" ? "安全锁定" : "启用"}</label>
+      </div>`
+    )
+    .join("");
+  // Wire up toggles
+  el.toolsList.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
+    cb.addEventListener("change", async () => {
+      const name = cb.dataset.tool;
+      const enabled = cb.checked;
+      try {
+        await invoke("toggle_tool", { name, enabled });
+        cb.closest(".tool-card").classList.toggle("disabled", !enabled);
+      } catch (err) {
+        cb.checked = !enabled; // revert
+        showStatus("切换失败: " + err, "err");
+      }
+    });
+  });
+}
+
 el.rewriteTab.addEventListener("click", () => showView("rewrite"));
 el.qqTab.addEventListener("click", () => { showView("qq"); readQqMessage(); });
+el.agentTab.addEventListener("click", () => showView("agent"));
+el.toolsTab.addEventListener("click", () => showView("tools"));
 el.settingsBtn.addEventListener("click", () => { showView("settings"); loadSettings(); });
 el.providerPreset.addEventListener("change", applyProviderPreset);
 el.saveSettings.addEventListener("click", saveSettings);
 el.qqRefresh.addEventListener("click", readQqMessage);
 el.qqGenerate.addEventListener("click", generateQqDraft);
 el.qqWrite.addEventListener("click", writeQqDraft);
+el.chatSend.addEventListener("click", sendChatMessage);
+el.agentReset.addEventListener("click", resetAgentChat);
+el.chatInput.addEventListener("keydown", (e) => {
+  if (e.ctrlKey && e.key === "Enter") {
+    e.preventDefault();
+    sendChatMessage();
+  }
+});
 
 // Native drag: begin a Win32 window move on the titlebar. `data-tauri-drag-region`
 // is unreliable for a non-activating window, so we drive it explicitly. Ignore

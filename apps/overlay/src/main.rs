@@ -17,6 +17,8 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod secret_store;
+
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::thread;
@@ -25,13 +27,15 @@ use std::time::Duration;
 use assistant_core::{
     diff_chars, transformer_by_name, DiffOp, InputAdapter, SelectionSnapshot, WriteReceipt,
 };
-use assistant_inference::{CloudAgentBackend, CloudBackend, CloudConfig, LocalBackend, ModelBackend, ModelTask};
+use assistant_inference::{
+    CloudAgentBackend, CloudBackend, CloudConfig, LocalBackend, ModelBackend, ModelTask,
+};
 use assistant_windows::{
     capture_qq_selection_text, qq_write_draft, remember_foreground_if_qq, resolve_qq_window,
     run_assistant_hotkey_loop, wait_for_trigger_release, AssistantHotkey, WindowsAdapter,
 };
-use lingxi_agent::{AgentBackend, AgentEngine, Session};
-use lingxi_tools::{AutoConfirm, ConfirmGate, RiskLevel, ToolRegistry};
+use lingxi_agent::{AgentBackend, AgentEngine, AgentRunReport, Session};
+use lingxi_tools::{ConfirmGate, DenyAll, RiskLevel, ToolRegistry};
 use serde::{Deserialize, Serialize};
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
@@ -70,6 +74,8 @@ struct BackendSettings {
     model: String,
     #[serde(skip)]
     api_key: String,
+    /// Whether the key is persisted using Windows DPAPI for this user.
+    remember_api_key: bool,
 }
 
 impl Default for BackendSettings {
@@ -79,6 +85,7 @@ impl Default for BackendSettings {
             endpoint: "https://api.openai.com".into(),
             model: "gpt-4o-mini".into(),
             api_key: std::env::var("LINGXI_OPENAI_API_KEY").unwrap_or_default(),
+            remember_api_key: false,
         }
     }
 }
@@ -89,6 +96,7 @@ struct BackendSettingsView {
     endpoint: String,
     model: String,
     api_key_configured: bool,
+    remember_api_key: bool,
 }
 
 #[derive(Deserialize)]
@@ -100,6 +108,8 @@ struct BackendSettingsInput {
     // frontend key style change cannot break saving again.
     #[serde(alias = "apiKey")]
     api_key: String,
+    #[serde(alias = "rememberApiKey")]
+    remember_api_key: bool,
 }
 
 /// Shared state for rewrite, pet and semi-automatic chat flows.
@@ -142,10 +152,7 @@ impl Default for AppState {
                 lingxi_tools_windows::register_default_tools(&mut reg);
                 reg
             }),
-            agent_session: std::sync::Mutex::new(Session::new(
-                uuid::Uuid::new_v4().to_string(),
-                dirs::home_dir().unwrap_or_default(),
-            )),
+            agent_session: std::sync::Mutex::new(load_agent_session()),
         }
     }
 }
@@ -243,12 +250,21 @@ fn load_backend_settings() -> BackendSettings {
         .and_then(|path| std::fs::read(path).ok())
         .and_then(|bytes| serde_json::from_slice::<BackendSettings>(&bytes).ok())
         .unwrap_or_default();
-    settings.api_key = std::env::var("LINGXI_OPENAI_API_KEY").unwrap_or_default();
-    // A persisted cloud choice without a session/environment key cannot work
-    // after restart. Fall back safely rather than opening into repeated errors.
-    if settings.backend == "cloud" && settings.api_key.is_empty() {
-        settings.backend = "local".into();
+    let env_key = std::env::var("LINGXI_OPENAI_API_KEY").unwrap_or_default();
+    if !env_key.is_empty() {
+        settings.api_key = env_key;
+    } else if settings.remember_api_key {
+        match secret_store::load_api_key() {
+            Ok(Some(key)) => settings.api_key = key,
+            Ok(None) | Err(_) => {
+                settings.api_key.clear();
+                settings.remember_api_key = false;
+            }
+        }
     }
+    // Keep the user's selected backend even when the credential is missing;
+    // the UI can now explain the exact problem instead of silently switching
+    // backends and making Agent behavior appear inconsistent.
     settings
 }
 
@@ -262,6 +278,46 @@ fn persist_backend_settings(settings: &BackendSettings) -> Result<(), String> {
     std::fs::write(path, json).map_err(|error| error.to_string())
 }
 
+fn default_agent_working_dir() -> std::path::PathBuf {
+    dirs::document_dir()
+        .or_else(dirs::home_dir)
+        .unwrap_or_default()
+}
+
+fn agent_session_path() -> Option<std::path::PathBuf> {
+    dirs::config_dir().map(|dir| dir.join("lingxi").join("agent-session.json"))
+}
+
+fn load_agent_session() -> Session {
+    let mut session = agent_session_path()
+        .and_then(|path| std::fs::read(path).ok())
+        .and_then(|bytes| serde_json::from_slice::<Session>(&bytes).ok())
+        .unwrap_or_else(|| {
+            Session::new(
+                uuid::Uuid::new_v4().to_string(),
+                default_agent_working_dir(),
+            )
+        });
+    if !session.working_dir.is_dir() {
+        session.working_dir = default_agent_working_dir();
+    }
+    session.trim_history(40);
+    session
+}
+
+fn persist_agent_session(session: &Session) -> Result<(), String> {
+    let path = agent_session_path().ok_or("无法解析灵犀配置目录")?;
+    let parent = path.parent().ok_or("无法解析会话目录")?;
+    std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    let json = serde_json::to_vec_pretty(session).map_err(|error| error.to_string())?;
+    let temp = path.with_extension("json.tmp");
+    std::fs::write(&temp, json).map_err(|error| error.to_string())?;
+    if path.exists() {
+        std::fs::remove_file(&path).map_err(|error| error.to_string())?;
+    }
+    std::fs::rename(&temp, &path).map_err(|error| error.to_string())
+}
+
 #[tauri::command]
 fn get_backend_settings(state: State<AppState>) -> BackendSettingsView {
     let settings = state.backend.lock().unwrap();
@@ -270,6 +326,7 @@ fn get_backend_settings(state: State<AppState>) -> BackendSettingsView {
         endpoint: settings.endpoint.clone(),
         model: settings.model.clone(),
         api_key_configured: !settings.api_key.is_empty(),
+        remember_api_key: settings.remember_api_key,
     }
 }
 
@@ -295,6 +352,18 @@ fn save_backend_settings(
     if !input.api_key.trim().is_empty() {
         settings.api_key = input.api_key.trim().to_string();
     }
+    if settings.backend == "cloud" && settings.api_key.is_empty() {
+        return Err("云端模型需要 API Key".into());
+    }
+    if input.remember_api_key {
+        if settings.api_key.is_empty() {
+            return Err("请先填写 API Key 再启用安全记忆".into());
+        }
+        secret_store::save_api_key(&settings.api_key)?;
+    } else {
+        secret_store::delete_api_key()?;
+    }
+    settings.remember_api_key = input.remember_api_key;
     persist_backend_settings(&settings)?;
     let start_local = settings.backend == "local" && !assistant_inference::is_ready();
     let view = BackendSettingsView {
@@ -302,6 +371,7 @@ fn save_backend_settings(
         endpoint: settings.endpoint.clone(),
         model: settings.model.clone(),
         api_key_configured: !settings.api_key.is_empty(),
+        remember_api_key: settings.remember_api_key,
     };
     drop(settings);
     *state.last_preview.lock().unwrap() = None;
@@ -471,8 +541,11 @@ struct ToolView {
 async fn agent_chat(
     state: State<'_, AppState>,
     message: String,
-) -> Result<String, String> {
+) -> Result<AgentRunReport, String> {
     let settings = state.backend.lock().unwrap().clone();
+    if settings.backend != "cloud" {
+        return Err("Agent 对话暂需云端模型，请在模型设置中切换到 OpenAI 兼容云端。".into());
+    }
     if settings.endpoint.is_empty() || settings.api_key.is_empty() {
         return Err("请先在设置页配置云端模型的 Endpoint 和 API Key。".into());
     }
@@ -499,25 +572,65 @@ async fn agent_chat(
     }
 
     let engine = AgentEngine::new(backend_box, std::sync::Arc::new(registry));
-    let confirm = std::sync::Arc::new(AutoConfirm) as std::sync::Arc<dyn ConfirmGate>;
+    // Dangerous tools are denied until the overlay gains a per-invocation
+    // approval flow. They are also disabled in the default registry, providing
+    // defense in depth against accidental shell/file mutations.
+    let confirm = std::sync::Arc::new(DenyAll) as std::sync::Arc<dyn ConfirmGate>;
 
     // Take the session out of the Mutex so we can hold it across .await
     // without the MutexGuard blocking Send.
     let mut session = std::mem::take(&mut *state.agent_session.lock().unwrap());
-    let result = engine.run(&message, &mut session, confirm).await;
-    // Put the session back regardless of success/failure.
+    let result = engine.run_with_trace(&message, &mut session, confirm).await;
+    // Persist and restore the session regardless of model success so the user
+    // does not lose prior turns after a transient network error.
+    let persist_result = persist_agent_session(&session);
     *state.agent_session.lock().unwrap() = session;
 
-    result.map_err(|e| e.to_string())
+    let report = result.map_err(|e| e.to_string())?;
+    persist_result?;
+    Ok(report)
+}
+
+#[derive(Serialize)]
+struct AgentHistoryItem {
+    role: String,
+    content: String,
+}
+
+/// Return user-visible messages from the persisted Agent conversation.
+#[tauri::command]
+fn agent_history(state: State<AppState>) -> Vec<AgentHistoryItem> {
+    use lingxi_agent::Role;
+
+    state
+        .agent_session
+        .lock()
+        .unwrap()
+        .messages
+        .iter()
+        .filter_map(|message| {
+            let role = match message.role {
+                Role::User => "user",
+                Role::Assistant if message.tool_calls.is_empty() => "assistant",
+                _ => return None,
+            };
+            (!message.content.trim().is_empty()).then(|| AgentHistoryItem {
+                role: role.to_string(),
+                content: message.content.clone(),
+            })
+        })
+        .collect()
 }
 
 /// Reset the agent conversation session (start a new chat).
 #[tauri::command]
 fn agent_reset(state: State<AppState>) -> Result<(), String> {
-    *state.agent_session.lock().unwrap() = Session::new(
+    let session = Session::new(
         uuid::Uuid::new_v4().to_string(),
-        dirs::home_dir().unwrap_or_default(),
+        default_agent_working_dir(),
     );
+    persist_agent_session(&session)?;
+    *state.agent_session.lock().unwrap() = session;
     Ok(())
 }
 
@@ -543,6 +656,12 @@ fn list_tools(state: State<AppState>) -> Vec<ToolView> {
 #[tauri::command]
 fn toggle_tool(state: State<AppState>, name: String, enabled: bool) -> Result<(), String> {
     let mut reg = state.tool_registry.lock().unwrap();
+    let risk = reg
+        .risk_of(&name)
+        .ok_or_else(|| format!("未知工具: {name}"))?;
+    if enabled && risk == RiskLevel::Dangerous {
+        return Err("危险工具需要逐次确认，当前安全模式下不可启用。".into());
+    }
     reg.set_enabled(&name, enabled);
     Ok(())
 }
@@ -1399,6 +1518,7 @@ fn main() {
             write_qq_draft,
             quit_app,
             agent_chat,
+            agent_history,
             agent_reset,
             list_tools,
             toggle_tool

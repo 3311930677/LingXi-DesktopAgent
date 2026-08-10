@@ -14,8 +14,7 @@ impl Tool for RunCommandTool {
     fn schema(&self) -> ToolSchema {
         ToolSchema {
             name: "run_command".into(),
-            description: "执行系统命令并返回输出。此工具具有风险，每次执行前需要用户确认。"
-                .into(),
+            description: "执行系统命令并返回输出。此工具具有风险，每次执行前需要用户确认。".into(),
             parameters: json!({
                 "type": "object",
                 "properties": {
@@ -52,10 +51,7 @@ impl Tool for RunCommandTool {
         };
 
         let result = tokio::task::spawn_blocking(move || {
-            Command::new(program)
-                .args(&args)
-                .current_dir(&cwd)
-                .output()
+            Command::new(program).args(&args).current_dir(&cwd).output()
         })
         .await;
 

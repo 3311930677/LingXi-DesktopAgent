@@ -1068,9 +1068,18 @@ mod tests {
     }
 
     #[test]
-    fn long_rewrite_guard_rejects_truncation() {
+    fn long_rewrite_surfaces_truncation_as_advice() {
         let input = "第一段说明项目背景和当前进度。第二段列出尚未解决的问题。第三段说明后续计划和负责人。";
-        assert!(validate_output(&POLISH, input, "第一段说明项目背景。".into()).is_err());
+        let truncated = "第一段说明项目背景。";
+        // Non-empty output remains visible to the user; suspected truncation is
+        // reported by the same non-blocking warning channel as other quality
+        // concerns. This matches validate_output's documented contract.
+        assert_eq!(
+            validate_output(&POLISH, input, truncated.into()).unwrap(),
+            truncated
+        );
+        assert!(quality_warning(ModelTask::Polish, input, truncated).is_some());
+
         let complete = "第一段将完整介绍项目背景，并说明目前已经取得的实际进度。第二段会逐项列出当前尚未解决的问题，确保没有遗漏。第三段则进一步明确后续的推进计划以及对应负责人。";
         assert_eq!(validate_output(&POLISH, input, complete.into()).unwrap(), complete);
     }
