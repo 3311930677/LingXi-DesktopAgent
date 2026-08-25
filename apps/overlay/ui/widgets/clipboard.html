@@ -108,8 +108,16 @@ function renderClipboard() {
     del.textContent = "✕";
     del.onclick = (e) => {
       e.stopPropagation();
-      clipCache = clipCache.filter(c => c !== item);
-      renderClipboard();
+      if (invoke) {
+        invoke("widget_clipboard_remove", { text: item.text }).then(() => {
+          clipCache = clipCache.filter(c => c !== item);
+          renderClipboard();
+          setStatus("已删除", "ok");
+        }).catch(err => setStatus("删除失败: " + String(err), "err"));
+      } else {
+        clipCache = clipCache.filter(c => c !== item);
+        renderClipboard();
+      }
     };
     meta.append(time, del);
     div.append(text, meta);
@@ -137,25 +145,10 @@ el.clearBtn.onclick = async () => {
   } catch(e) { setStatus("清空失败: " + String(e), "err"); }
 };
 
-// 监听系统剪贴板变化（通过定时轮询 read_clipboard 对比）
-async function pollClipboard() {
-  if (!invoke) return;
-  try {
-    const current = await invoke("widget_read_clipboard").catch(() => null);
-    if (current && current.trim()) {
-      // 如果与最后一条不同，写入历史
-      const last = clipCache[0];
-      if (!last || last.text !== current.trim()) {
-        await invoke("widget_clipboard_write", { text: current.trim() }).catch(() => {});
-        await loadClipboard();
-      }
-    }
-  } catch { /* ignore */ }
-}
-
+// 系统剪贴板由后端监听线程写入历史，前端只需定期刷新展示。
 setupWidgetClose("widget-clipboard");
 loadClipboard();
-setInterval(pollClipboard, 2000);
+setInterval(loadClipboard, 2000);
 </script>
 </body>
 </html>

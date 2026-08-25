@@ -26,6 +26,11 @@ pub struct WidgetManifest {
     pub height: f64,
     /// Whether the window is resizable.
     pub resizable: bool,
+    /// Whether the widget floats above all other applications. Only
+    /// transient pickers (取色器等即用即走的工具) should set this — forcing
+    /// every widget on top is intrusive: normal tools like the calculator
+    /// or weather should behave like regular app windows.
+    pub always_on_top: bool,
     /// HTML page path relative to the ui/ directory.
     pub page: &'static str,
     /// Short description for the tools grid.
@@ -44,6 +49,7 @@ pub fn builtin_widgets() -> Vec<WidgetManifest> {
             width: 460.0,
             height: 440.0,
             resizable: true,
+            always_on_top: false,
             page: "widgets/ocr.html",
             description: "框选屏幕区域，OCR 提取文字",
         },
@@ -55,6 +61,7 @@ pub fn builtin_widgets() -> Vec<WidgetManifest> {
             width: 460.0,
             height: 440.0,
             resizable: true,
+            always_on_top: false,
             page: "widgets/translate.html",
             description: "框选区域识别并翻译",
         },
@@ -66,6 +73,7 @@ pub fn builtin_widgets() -> Vec<WidgetManifest> {
             width: 340.0,
             height: 320.0,
             resizable: false,
+            always_on_top: true,
             page: "widgets/colorpicker.html",
             description: "屏幕取色，HEX/RGB/HSL",
         },
@@ -77,6 +85,7 @@ pub fn builtin_widgets() -> Vec<WidgetManifest> {
             width: 400.0,
             height: 470.0,
             resizable: true,
+            always_on_top: false,
             page: "widgets/weather.html",
             description: "当前天气与 3 日预报",
         },
@@ -88,6 +97,7 @@ pub fn builtin_widgets() -> Vec<WidgetManifest> {
             width: 360.0,
             height: 430.0,
             resizable: true,
+            always_on_top: false,
             page: "widgets/calculator.html",
             description: "输入即算，支持单位换算",
         },
@@ -99,6 +109,7 @@ pub fn builtin_widgets() -> Vec<WidgetManifest> {
             width: 420.0,
             height: 420.0,
             resizable: true,
+            always_on_top: false,
             page: "widgets/clipboard.html",
             description: "最近剪贴板记录",
         },
@@ -122,7 +133,7 @@ pub fn open_widget(app: &AppHandle, manifest: &WidgetManifest) -> tauri::Result<
         .inner_size(manifest.width, manifest.height)
         .resizable(manifest.resizable)
         .decorations(true)
-        .always_on_top(true)
+        .always_on_top(manifest.always_on_top)
         .skip_taskbar(false)
         .center()
         .on_page_load(move |window, payload| {
@@ -136,7 +147,7 @@ pub fn open_widget(app: &AppHandle, manifest: &WidgetManifest) -> tauri::Result<
         .build();
 
     match window {
-        Ok(w) => {
+        Ok(_w) => {
             eprintln!("[lingxi] widget {} built OK", manifest.id);
             // NOTE: do NOT call open_devtools() here — on Windows, opening
             // DevTools on a freshly created WebView2 window minimizes the
@@ -152,10 +163,13 @@ pub fn open_widget(app: &AppHandle, manifest: &WidgetManifest) -> tauri::Result<
     }
 }
 
-/// Close a widget window by id.
+/// Close a widget window by id. Uses `destroy()` instead of `close()`:
+/// `close()` goes through a CloseRequested round-trip that can stall when
+/// the webview's JS is busy (observed as "关不掉"), while `destroy()` closes
+/// the window immediately.
 pub fn close_widget(app: &AppHandle, id: &str) -> tauri::Result<()> {
     if let Some(window) = app.get_webview_window(id) {
-        window.close()?;
+        window.destroy()?;
     }
     Ok(())
 }

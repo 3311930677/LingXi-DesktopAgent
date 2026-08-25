@@ -1795,33 +1795,84 @@ async fn widget_calculate(expression: String) -> Result<serde_json::Value, Strin
     }
 }
 
-/// Translate text using the built-in translate tool.
+/// Resolve translation provider config: the settings page (AppState) wins
+/// when an API key is saved there; otherwise fall back to the
+/// `LINGXI_OPENAI_*` environment variables, then DeepSeek defaults.
+fn translation_config(state: &AppState) -> (String, String, String) {
+    const DEFAULT_BASE_URL: &str = "https://api.deepseek.com";
+    const DEFAULT_MODEL: &str = "deepseek-chat";
+
+    let settings = state.backend.safe_lock();
+    if !settings.api_key.trim().is_empty() {
+        let endpoint = if settings.endpoint.trim().is_empty() {
+            DEFAULT_BASE_URL.to_string()
+        } else {
+            settings.endpoint.clone()
+        };
+        let model = if settings.model.trim().is_empty() {
+            DEFAULT_MODEL.to_string()
+        } else {
+            settings.model.clone()
+        };
+        return (settings.api_key.trim().to_string(), endpoint, model);
+    }
+    drop(settings);
+
+    let key = std::env::var("LINGXI_OPENAI_API_KEY").unwrap_or_default();
+    let base = std::env::var("LINGXI_OPENAI_BASE_URL").unwrap_or_else(|_| DEFAULT_BASE_URL.into());
+    let model = std::env::var("LINGXI_OPENAI_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.into());
+    (key, base, model)
+}
+
+/// Shared translation core used by both the widget command and the
+/// capture-and-translate flow.
+async fn translate_text(
+    state: &AppState,
+    text: String,
+    from: String,
+    to: String,
+) -> Result<String, String> {
+    let (api_key, base_url, model) = translation_config(state);
+    if api_key.is_empty() {
+        return Err(
+            "翻译服务未配置：请在主面板「设置」中填写云端 API Key（或设置 \
+             LINGXI_OPENAI_API_KEY 环境变量）"
+                .to_string(),
+        );
+    }
+    let translated = tauri::async_runtime::spawn_blocking(move || {
+        lingxi_tools::builtin::translate::translate_with_config(
+            &api_key, &base_url, &model, &text, &from, &to,
+        )
+    })
+    .await
+    .map_err(|e| format!("翻译任务失败: {e}"))??;
+    Ok(translated)
+}
+
+/// Translate text using the settings-page cloud config.
 #[tauri::command]
-async fn widget_translate(text: String, from: String, to: String) -> Result<serde_json::Value, String> {
-    use lingxi_tools::{builtin::translate::TranslateTool, Tool, ToolContext, AutoConfirm};
-    let tool = TranslateTool;
-    let ctx = ToolContext {
-        working_dir: std::env::current_dir().unwrap_or_default(),
-        confirm: std::sync::Arc::new(AutoConfirm),
-        session_id: String::new(),
-    };
-    let params = serde_json::json!({ "text": text, "from": from, "to": to });
-    let result = tokio::time::timeout(
-        Duration::from_secs(15),
-        tool.execute(params, &ctx),
+async fn widget_translate(
+    state: tauri::State<'_, AppState>,
+    text: String,
+    from: String,
+    to: String,
+) -> Result<serde_json::Value, String> {
+    let translated = tokio::time::timeout(
+        Duration::from_secs(20),
+        translate_text(&state, text, from, to),
     )
     .await
-    .map_err(|_| "翻译超时（15秒）".to_string())?;
-    if result.success {
-        Ok(serde_json::json!({ "translated": result.output.trim() }))
-    } else {
-        Err(result.output)
-    }
+    .map_err(|_| "翻译超时（20秒），请检查网络或稍后重试".to_string())??;
+    Ok(serde_json::json!({ "translated": translated.trim() }))
 }
 
 /// Capture screen, let user select region, OCR and translate in one step.
 #[tauri::command]
-async fn widget_capture_and_translate(target_lang: String) -> Result<serde_json::Value, String> {
+async fn widget_capture_and_translate(
+    state: tauri::State<'_, AppState>,
+    target_lang: String,
+) -> Result<serde_json::Value, String> {
     #[cfg(windows)]
     {
         // OCR on a blocking thread (PowerShell + WinRT takes seconds).
@@ -1863,8 +1914,8 @@ async fn widget_capture_and_translate(target_lang: String) -> Result<serde_json:
         }
 
         // Translate the recognized text.
-        let translated = match widget_translate(source.clone(), "auto".into(), target_lang).await {
-            Ok(v) => v.get("translated").and_then(|t| t.as_str()).unwrap_or("").to_string(),
+        let translated = match translate_text(&state, source.clone(), "auto".into(), target_lang).await {
+            Ok(t) => t,
             Err(e) => format!("翻译失败: {e}"),
         };
 
@@ -1893,6 +1944,44 @@ fn clipboard_history() -> &'static Mutex<Vec<ClipboardEntry>> {
     CLIPBOARD_HISTORY.get_or_init(|| Mutex::new(Vec::new()))
 }
 
+/// Background clipboard watcher. A real WM_CLIPBOARDUPDATE listener needs a
+/// message-only window on the event loop; a 1.5s poll is pragmatic for a
+/// history tool: no window plumbing, no risk of deadlocking the UI, and new
+/// text shows up within a couple of seconds.
+fn spawn_clipboard_listener() {
+    std::thread::spawn(|| {
+        use assistant_windows::read_clipboard_text;
+        let mut last_seen: Option<String> = None;
+        loop {
+            if let Ok(raw) = read_clipboard_text() {
+                let text = raw.trim().to_string();
+                if !text.is_empty() && last_seen.as_deref() != Some(text.as_str()) {
+                    last_seen = Some(text.clone());
+                    // Cap each entry at ~10k chars so a huge copy cannot bloat
+                    // the in-memory history.
+                    let text: String = text.chars().take(10_000).collect();
+                    if let Ok(mut history) = clipboard_history().lock() {
+                        let duplicate = history
+                            .first()
+                            .map(|e| e.text == text)
+                            .unwrap_or(false);
+                        if !duplicate {
+                            history.insert(0, ClipboardEntry {
+                                text,
+                                time: chrono_like_now(),
+                            });
+                            if history.len() > 50 {
+                                history.truncate(50);
+                            }
+                        }
+                    }
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1500));
+        }
+    });
+}
+
 #[tauri::command]
 fn widget_clipboard_history() -> Result<Vec<ClipboardEntry>, String> {
     let history = clipboard_history().lock().map_err(|e| format!("锁失败: {e}"))?;
@@ -1904,8 +1993,8 @@ fn widget_clipboard_write(text: String) -> Result<(), String> {
     use assistant_windows::write_clipboard_text;
     let now = chrono_like_now();
     let mut history = clipboard_history().lock().map_err(|e| format!("锁失败: {e}"))?;
-    // Avoid duplicates of consecutive identical entries.
-    if history.last().map(|e| e.text == text).unwrap_or(false) {
+    // Avoid duplicates of consecutive identical entries (newest is at index 0).
+    if history.first().map(|e| e.text == text).unwrap_or(false) {
         return Ok(());
     }
     history.insert(0, ClipboardEntry { text: text.clone(), time: now });
@@ -1920,6 +2009,17 @@ fn widget_clipboard_write(text: String) -> Result<(), String> {
 fn widget_clipboard_clear() -> Result<(), String> {
     let mut history = clipboard_history().lock().map_err(|e| format!("锁失败: {e}"))?;
     history.clear();
+    Ok(())
+}
+
+/// Remove a single entry (first match by text) so the delete button in the
+/// clipboard widget actually persists.
+#[tauri::command]
+fn widget_clipboard_remove(text: String) -> Result<(), String> {
+    let mut history = clipboard_history().lock().map_err(|e| format!("锁失败: {e}"))?;
+    if let Some(pos) = history.iter().position(|e| e.text == text) {
+        history.remove(pos);
+    }
     Ok(())
 }
 
@@ -2058,14 +2158,18 @@ fn weather_description(code: i64) -> &'static str {
     }
 }
 
+/// "HH:mm" local time. Spawning PowerShell for this (the old approach) costs
+/// ~1s per call, which is unacceptable inside the 1.5s clipboard poll loop;
+/// `GetLocalTime` is a zero-cost kernel call instead.
 fn chrono_like_now() -> String {
-    let output = std::process::Command::new("powershell")
-        .args(["-NoProfile", "-NonInteractive", "-Command", "Get-Date -Format 'HH:mm'"])
-        .output();
-    match output {
-        Ok(o) => String::from_utf8_lossy(&o.stdout).trim().to_string(),
-        Err(_) => String::new(),
+    #[cfg(windows)]
+    {
+        use windows::Win32::System::SystemInformation::GetLocalTime;
+        let t = unsafe { GetLocalTime() };
+        format!("{:02}:{:02}", t.wHour, t.wMinute)
     }
+    #[cfg(not(windows))]
+    String::new()
 }
 
 
@@ -2205,6 +2309,7 @@ fn main() {
             widget_clipboard_history,
             widget_clipboard_write,
             widget_clipboard_clear,
+            widget_clipboard_remove,
             widget_read_clipboard
         ])
         .setup(|app| {
@@ -2223,6 +2328,7 @@ fn main() {
             spawn_hotkey_worker(app.handle().clone());
             spawn_widget_hotkey_worker(app.handle().clone());
             spawn_qq_foreground_sampler();
+            spawn_clipboard_listener();
             install_tray(app.handle())?;
             // Smoke-test mode: LINGXI_OPEN_ALL_WIDGETS=1 opens every widget
             // window in sequence so they can be verified in bulk (check the

@@ -770,13 +770,17 @@ body {
   gap: 8px;
   margin: 0 14px;
   padding: 12px;
-  overflow: hidden;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--stroke-strong) transparent;
   color: var(--text-dim);
   font-size: 11px;
   background: rgba(0,0,0,.22);
   border: 1px solid var(--stroke);
   border-radius: 12px;
 }
+.tools-view::-webkit-scrollbar { width: 8px; }
+.tools-view::-webkit-scrollbar-thumb { background: var(--stroke-strong); border-radius: 8px; }
 .tools-toolbar {
   display: flex;
   flex: 0 0 auto;
@@ -842,14 +846,9 @@ body {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
   gap: 8px;
-  overflow-y: auto;
-  flex: 1 1 auto;
-  min-height: 0;
-  scrollbar-width: thin;
-  scrollbar-color: var(--stroke-strong) transparent;
+  /* 滚动由外层 .tools-view 统一承担，这里保持自然高度，
+     否则嵌套滚动 + flex 压缩会让工具列表划不动。 */
 }
-.tools-grid::-webkit-scrollbar { width: 8px; }
-.tools-grid::-webkit-scrollbar-thumb { background: var(--stroke-strong); border-radius: 8px; }
 .tool-card {
   padding: 10px;
   border: 1px solid var(--stroke);

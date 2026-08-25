@@ -50,6 +50,12 @@ impl Tool for TranslateTool {
             Some(t) if !t.trim().is_empty() => t.trim().to_string(),
             _ => return ToolResult::err("缺少有效的 to 参数"),
         };
+        let from = params
+            .get("from")
+            .and_then(|v| v.as_str())
+            .unwrap_or("auto")
+            .trim()
+            .to_string();
 
         let api_key = match std::env::var("LINGXI_OPENAI_API_KEY") {
             Ok(k) if !k.trim().is_empty() => k,
@@ -65,7 +71,7 @@ impl Tool for TranslateTool {
         let model =
             std::env::var("LINGXI_OPENAI_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string());
 
-        let job = move || translate_blocking(&api_key, &base_url, &model, &text, &to);
+        let job = move || translate_blocking(&api_key, &base_url, &model, &text, &from, &to);
         match tokio::task::spawn_blocking(job).await {
             Ok(Ok(translated)) => ToolResult::ok(translated),
             Ok(Err(e)) => ToolResult::err(format!("翻译失败: {e}")),
@@ -78,11 +84,41 @@ impl Tool for TranslateTool {
     }
 }
 
+/// Translate with an explicit provider config. Callers that hold their own
+/// settings (e.g. the overlay settings page) should prefer this over the
+/// environment-variable path in `TranslateTool::execute`.
+#[allow(clippy::too_many_arguments)]
+pub fn translate_with_config(
+    api_key: &str,
+    base_url: &str,
+    model: &str,
+    text: &str,
+    from: &str,
+    to: &str,
+) -> Result<String, String> {
+    translate_blocking(api_key, base_url, model, text, from, to)
+}
+
+/// Normalize an endpoint base (or full URL) into a chat-completions URL.
+/// Mirrors the overlay cloud backend: accepts `https://host`,
+/// `https://host/v1` and `https://host/v1/chat/completions`.
+fn chat_completions_url(base: &str) -> String {
+    let base = base.trim().trim_end_matches('/');
+    if base.ends_with("/chat/completions") {
+        base.to_string()
+    } else if base.ends_with("/v1") {
+        format!("{base}/chat/completions")
+    } else {
+        format!("{base}/v1/chat/completions")
+    }
+}
+
 fn translate_blocking(
     api_key: &str,
     base_url: &str,
     model: &str,
     text: &str,
+    from: &str,
     to: &str,
 ) -> Result<String, String> {
     let tls = native_tls::TlsConnector::new().map_err(|e| format!("TLS 初始化失败: {e}"))?;
@@ -91,7 +127,12 @@ fn translate_blocking(
         .timeout(TIMEOUT)
         .build();
 
-    let endpoint = format!("{}/v1/chat/completions", base_url.trim_end_matches('/'));
+    let endpoint = chat_completions_url(base_url);
+    let source_hint = if from.is_empty() || from == "auto" {
+        String::new()
+    } else {
+        format!("The source language is {from}. ")
+    };
     let payload = json!({
         "model": model,
         "messages": [
@@ -101,7 +142,7 @@ fn translate_blocking(
             },
             {
                 "role": "user",
-                "content": format!("Translate the following text to {to}:\n\n{text}")
+                "content": format!("{source_hint}Translate the following text to {to}:\n\n{text}")
             }
         ],
         "temperature": 0.1,

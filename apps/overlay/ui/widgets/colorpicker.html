@@ -141,7 +141,7 @@ function renderPalette() {
     div.style.background = hex;
     div.title = hex;
     div.onclick = () => {
-      navigator.clipboard.writeText(hex).then(() => setStatus("已复制 " + hex, "ok"));
+      writeClipboard(hex).then(() => setStatus("已复制 " + hex, "ok")).catch(() => setStatus("复制失败", "err"));
     };
     el.palette.appendChild(div);
   });
@@ -165,7 +165,7 @@ el.pickBtn.onclick = async () => {
 document.querySelectorAll(".color-value").forEach(row => {
   row.onclick = () => {
     const val = row.querySelector(".val").textContent;
-    navigator.clipboard.writeText(val).then(() => setStatus("已复制 " + val, "ok"));
+    writeClipboard(val).then(() => setStatus("已复制 " + val, "ok")).catch(() => setStatus("复制失败", "err"));
   };
 });
 

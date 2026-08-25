@@ -30,10 +30,14 @@
 }
 .forecast-day:first-child { border-color: rgba(138, 173, 244, 0.35); }
 .forecast-day .day { font-size: 10.5px; color: var(--text-faint); letter-spacing: 0.04em; }
+.forecast-day:first-child .day { color: var(--brand); font-weight: 600; }
+.forecast-day .date { font-size: 9.5px; color: var(--text-faint); margin-top: 1px; opacity: .8; }
 .forecast-day .icon { font-size: 20px; margin: 5px 0 4px; }
-.forecast-day .temps { font-size: 11px; font-variant-numeric: tabular-nums; }
-.forecast-day .high { color: var(--err); }
-.forecast-day .low { color: var(--text-dim); }
+.forecast-day .temps { font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.forecast-day .high { color: #f0a8a8; }
+.forecast-day .low { color: #a8c8f0; }
+.updated-at { text-align: center; font-size: 10px; color: var(--text-faint); flex: 0 0 auto; opacity: .85; }
+#content { flex: 1 1 auto; display: flex; flex-direction: column; gap: 10px; min-height: 0; }
 </style>
 </head>
 <body>
@@ -47,7 +51,7 @@
     <button class="btn btn-primary btn-sm" id="refresh">查询</button>
   </div>
   <div class="placeholder" id="loading"><span class="spinner"></span> 正在获取天气...</div>
-  <div id="content" style="display:none; flex:1; display:flex; flex-direction:column; gap:10px;">
+  <div id="content" style="display:none">
     <div class="current">
       <div class="icon" id="w-icon">🌤️</div>
       <div class="temp" id="w-temp">--°</div>
@@ -59,6 +63,7 @@
       </div>
     </div>
     <div class="forecast" id="forecast"></div>
+    <div class="updated-at" id="updated-at"></div>
   </div>
 </div>
 <script src="widget.js"></script>
@@ -87,6 +92,20 @@ const WEATHER_ICONS = {
   95: "⛈️", 96: "⛈️", 99: "⛈️",
 };
 
+const WEEKDAYS = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
+
+// 把预报日期转成“今天 / 明天 / 后天 / 周X”+ MM-DD 日期
+function describeDate(dateStr, index) {
+  const label = index === 0 ? "今天" : index === 1 ? "明天" : index === 2 ? "后天" : null;
+  let dateText = dateStr ? dateStr.substring(5).replace("-", "/") : "";
+  let weekday = "";
+  if (dateStr) {
+    const d = new Date(dateStr + "T00:00:00");
+    if (!isNaN(d)) weekday = WEEKDAYS[d.getDay()];
+  }
+  return { label: label || weekday, dateText };
+}
+
 async function loadWeather() {
   const city = el.cityInput.value.trim();
   el.loading.innerHTML = '<span class="spinner"></span> ' + (city ? "正在查询 " + city + " ..." : "正在获取天气...");
@@ -98,7 +117,7 @@ async function loadWeather() {
     const data = await invoke("widget_get_weather", { city: city || null });
     const cur = data.current;
     el.wIcon.textContent = WEATHER_ICONS[cur.weather_code] || "🌡️";
-    el.wTemp.textContent = Math.round(cur.temperature) + "°";
+    el.wTemp.innerHTML = Math.round(cur.temperature) + '<span style="font-size:20px;color:var(--text-dim)">°C</span>';
     el.wDesc.textContent = cur.description;
     el.wCity.textContent = data.city && data.city !== "未知" ? data.city : "";
     el.wHumidity.textContent = cur.humidity + "%";
@@ -106,15 +125,20 @@ async function loadWeather() {
 
     el.forecast.innerHTML = "";
     const daily = data.daily || [];
-    daily.forEach((d) => {
+    daily.forEach((d, i) => {
       const day = document.createElement("div");
       day.className = "forecast-day";
-      const dateStr = d.date ? d.date.substring(5) : "";
-      day.innerHTML = '<div class="day">' + dateStr + '</div>'
+      const info = describeDate(d.date, i);
+      day.innerHTML = '<div class="day">' + info.label + '</div>'
+        + '<div class="date">' + info.dateText + '</div>'
         + '<div class="icon">' + (WEATHER_ICONS[d.weather_code] || "🌡️") + '</div>'
-        + '<div class="temps"><span class="high">' + Math.round(d.max) + '°</span> / <span class="low">' + Math.round(d.min) + '°</span></div>';
+        + '<div class="temps"><span class="high">' + Math.round(d.max) + '°</span><span class="sep" style="opacity:.4"> / </span><span class="low">' + Math.round(d.min) + '°</span></div>';
       el.forecast.appendChild(day);
     });
+
+    const now = new Date();
+    const timeStr = String(now.getHours()).padStart(2, "0") + ":" + String(now.getMinutes()).padStart(2, "0");
+    document.getElementById("updated-at").textContent = "更新于 " + timeStr;
 
     el.loading.style.display = "none";
     el.content.style.display = "flex";
