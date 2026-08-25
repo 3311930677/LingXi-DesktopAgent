@@ -21,8 +21,9 @@ assistant-inference = { path = "../../crates/assistant-inference" }
 lingxi-agent = { path = "../../crates/lingxi-agent" }
 lingxi-tools = { path = "../../crates/tools" }
 lingxi-tools-windows = { path = "../../crates/tools-windows" }
-tokio = { version = "1", features = ["rt-multi-thread"] }
+tokio = { version = "1", features = ["rt-multi-thread", "time"] }
 uuid = { version = "1", features = ["v4"] }
+futures = "0.3"
 windows = { version = "0.58", features = [
     "Win32_Foundation",
     "Win32_Security_Cryptography",

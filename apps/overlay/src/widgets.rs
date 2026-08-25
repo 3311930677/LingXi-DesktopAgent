@@ -1,0 +1,171 @@
+//! Widget framework: manifest, registry, and multi-window management.
+//!
+//! Each widget is a small independent Tauri window with its own HTML page,
+//! launched on demand via `open_widget`. The manifest declares the widget's
+//! metadata (label, shortcut, size) and is shared between the tray menu,
+//! the tools grid, and the hotkey system.
+
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use tauri::{AppHandle, Manager, WebviewWindowBuilder};
+
+/// A widget's static metadata, declared at compile time.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WidgetManifest {
+    /// Unique identifier used as the Tauri window label.
+    pub id: &'static str,
+    /// Display name shown in tray menu and tools grid.
+    pub label: &'static str,
+    /// Emoji or short icon string.
+    pub icon: &'static str,
+    /// Global shortcut (empty string = no shortcut).
+    pub shortcut: &'static str,
+    /// Default window width in pixels.
+    pub width: f64,
+    /// Default window height in pixels.
+    pub height: f64,
+    /// Whether the window is resizable.
+    pub resizable: bool,
+    /// HTML page path relative to the ui/ directory.
+    pub page: &'static str,
+    /// Short description for the tools grid.
+    pub description: &'static str,
+}
+
+/// The built-in widget catalog. Additional widgets can be registered at
+/// runtime in the future via plugins.
+pub fn builtin_widgets() -> Vec<WidgetManifest> {
+    vec![
+        WidgetManifest {
+            id: "widget-ocr",
+            label: "屏幕识别",
+            icon: "🔍",
+            shortcut: "Ctrl+Alt+O",
+            width: 460.0,
+            height: 440.0,
+            resizable: true,
+            page: "widgets/ocr.html",
+            description: "框选屏幕区域，OCR 提取文字",
+        },
+        WidgetManifest {
+            id: "widget-translate",
+            label: "全屏翻译",
+            icon: "🌐",
+            shortcut: "Ctrl+Alt+T",
+            width: 460.0,
+            height: 440.0,
+            resizable: true,
+            page: "widgets/translate.html",
+            description: "框选区域识别并翻译",
+        },
+        WidgetManifest {
+            id: "widget-colorpicker",
+            label: "取色器",
+            icon: "🎨",
+            shortcut: "Ctrl+Alt+C",
+            width: 340.0,
+            height: 320.0,
+            resizable: false,
+            page: "widgets/colorpicker.html",
+            description: "屏幕取色，HEX/RGB/HSL",
+        },
+        WidgetManifest {
+            id: "widget-weather",
+            label: "天气",
+            icon: "🌤️",
+            shortcut: "",
+            width: 400.0,
+            height: 470.0,
+            resizable: true,
+            page: "widgets/weather.html",
+            description: "当前天气与 3 日预报",
+        },
+        WidgetManifest {
+            id: "widget-calculator",
+            label: "计算器",
+            icon: "🧮",
+            shortcut: "Ctrl+Alt+=",
+            width: 360.0,
+            height: 430.0,
+            resizable: true,
+            page: "widgets/calculator.html",
+            description: "输入即算，支持单位换算",
+        },
+        WidgetManifest {
+            id: "widget-clipboard",
+            label: "剪贴板历史",
+            icon: "📋",
+            shortcut: "Ctrl+Alt+V",
+            width: 420.0,
+            height: 420.0,
+            resizable: true,
+            page: "widgets/clipboard.html",
+            description: "最近剪贴板记录",
+        },
+    ]
+}
+
+/// Open a widget as a new Tauri window, or focus it if already open.
+pub fn open_widget(app: &AppHandle, manifest: &WidgetManifest) -> tauri::Result<()> {
+    // If the window already exists, just focus it.
+    if let Some(window) = app.get_webview_window(manifest.id) {
+        window.show()?;
+        window.set_focus()?;
+        return Ok(());
+    }
+
+    let url = manifest.page.to_string();
+    eprintln!("[lingxi] opening widget {} -> {}", manifest.id, url);
+
+    let window = WebviewWindowBuilder::new(app, manifest.id, tauri::WebviewUrl::App(url.into()))
+        .title(format!("{} · 灵犀", manifest.label))
+        .inner_size(manifest.width, manifest.height)
+        .resizable(manifest.resizable)
+        .decorations(true)
+        .always_on_top(true)
+        .skip_taskbar(false)
+        .center()
+        .on_page_load(move |window, payload| {
+            eprintln!(
+                "[lingxi] widget {} page_load: {:?} url={}",
+                window.label(),
+                payload.event(),
+                payload.url()
+            );
+        })
+        .build();
+
+    match window {
+        Ok(w) => {
+            eprintln!("[lingxi] widget {} built OK", manifest.id);
+            #[cfg(debug_assertions)]
+            w.open_devtools();
+            Ok(())
+        }
+        Err(e) => {
+            eprintln!("[lingxi] widget {} build FAILED: {}", manifest.id, e);
+            Err(e)
+        }
+    }
+}
+
+/// Close a widget window by id.
+pub fn close_widget(app: &AppHandle, id: &str) -> tauri::Result<()> {
+    if let Some(window) = app.get_webview_window(id) {
+        window.close()?;
+    }
+    Ok(())
+}
+
+/// Check which widgets are currently open.
+pub fn open_widget_ids(app: &AppHandle) -> Vec<String> {
+    let ids: HashMap<String, ()> = builtin_widgets()
+        .iter()
+        .map(|w| (w.id.to_string(), ()))
+        .collect();
+    app.webview_windows()
+        .keys()
+        .filter(|k| ids.contains_key(k.as_str()))
+        .cloned()
+        .collect()
+}

@@ -11,9 +11,9 @@
 - [ ] 重写 README 聚焦当前实际能力
 
 ## P2 — 安全
-- [ ] 设置 CSP (tauri.conf.json csp: null)
-- [ ] capabilities 补全 tray-icon 权限
-- [ ] assistant-inference flush 错误处理 (lib.rs:632)
+- [x] 设置 CSP (tauri.conf.json 已配置 default-src 'self' 等)
+- [x] capabilities 补全 tray-icon 权限（core:tray:default）
+- [x] assistant-inference flush 错误处理 (lib.rs:632 已改为 context 传播)
 
 ## P3 — CI/CD
 - [ ] CI 显式指定 target triple (gnu/msvc)
@@ -24,5 +24,5 @@
 ## P4 — 代码质量
 - [ ] 拆分 app.js (26KB) 为模块
 - [ ] eprintln → log crate
-- [ ] 创建 CLAUDE.md
+- [x] 创建 CLAUDE.md
 - [ ] 修复 assistant-inference tests::long_rewrite_guard_rejects_truncation 失败（预存问题，validate_output 截断检测阈值）

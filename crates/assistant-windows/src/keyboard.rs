@@ -95,7 +95,7 @@ pub(crate) fn delete_selection() -> Result<(), AdapterError> {
 /// renders the composer's accessibility node after it receives focus, so we
 /// click on its physical location (computed from the QQ window bounds) and
 /// then use Ctrl+A / Ctrl+V to replace its contents.
-pub(crate) fn click_at(x: i32, y: i32) -> Result<(), AdapterError> {
+pub fn click_at(x: i32, y: i32) -> Result<(), AdapterError> {
     // Convert screen pixels to the absolute coordinate space SendInput expects
     // (0..65535 mapped across the full primary monitor). Doing the move and
     // click in a single SendInput batch avoids the cursor visibly dwelling at

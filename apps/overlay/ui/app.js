@@ -8,6 +8,66 @@ document.documentElement.classList.toggle("tauri-runtime", Boolean(invoke));
 // Sample text used only for the in-browser preview (no Tauri backend).
 const MOCK_SOURCE = "圆圆的月亮真好看";
 
+// Tool icon mapping (emoji) for the tools-view card grid.
+const TOOL_ICONS = {
+  read_file: "📄", write_file: "✏️", list_dir: "📂", search_files: "🔍",
+  run_command: "⚙️", read_clipboard: "📋", write_clipboard: "📋",
+  list_windows: "🪟", focus_window: "🎯", capture_screen: "📸",
+  open_app: "🚀", type_text: "⌨️", send_keys: "⌨️", click_at: "🖱️",
+  web_fetch: "🌐", web_search: "🔎", translate: "🌐", calculate: "🧮",
+  get_time: "🕐", set_reminder: "⏰", list_reminders: "⏰", cancel_reminder: "⏰",
+  qq_read_selection: "💬", qq_write_draft: "💬",
+};
+
+// Tool category mapping for the filter tabs.
+const TOOL_CATEGORIES = {
+  read_file: "capability", write_file: "capability", list_dir: "capability",
+  search_files: "capability", read_clipboard: "capability", write_clipboard: "capability",
+  run_command: "capability", capture_screen: "capability",
+  list_windows: "adapter", focus_window: "adapter", open_app: "adapter",
+  type_text: "adapter", send_keys: "adapter", click_at: "adapter",
+  qq_read_selection: "adapter", qq_write_draft: "adapter",
+  web_fetch: "source", web_search: "source", translate: "source",
+  get_time: "source", set_reminder: "source", list_reminders: "source", cancel_reminder: "source",
+  calculate: "transform",
+};
+
+// Global hotkey shortcuts for tools that expose one (from VISION.md/ROADMAP.md).
+const TOOL_SHORTCUTS = {
+  capture_screen: "Ctrl+Alt+O",
+  translate: "Ctrl+Alt+T",
+  read_clipboard: "Ctrl+Alt+V",
+  write_clipboard: "Ctrl+Alt+V",
+};
+
+// Sample tools shown only in the browser preview (no Tauri backend).
+const MOCK_TOOLS = [
+  { name: "read_file", description: "读取文件内容", risk_level: "safe", enabled: true },
+  { name: "write_file", description: "写入文件", risk_level: "moderate", enabled: true },
+  { name: "list_dir", description: "列出目录内容", risk_level: "safe", enabled: true },
+  { name: "search_files", description: "搜索文件内容", risk_level: "safe", enabled: true },
+  { name: "run_command", description: "执行系统命令", risk_level: "dangerous", enabled: false },
+  { name: "read_clipboard", description: "读取剪贴板", risk_level: "safe", enabled: true },
+  { name: "write_clipboard", description: "写入剪贴板", risk_level: "moderate", enabled: true },
+  { name: "list_windows", description: "列出所有窗口", risk_level: "safe", enabled: true },
+  { name: "focus_window", description: "聚焦指定窗口", risk_level: "moderate", enabled: true },
+  { name: "capture_screen", description: "截取屏幕区域", risk_level: "safe", enabled: true },
+  { name: "open_app", description: "打开应用程序", risk_level: "moderate", enabled: true },
+  { name: "type_text", description: "输入文字", risk_level: "moderate", enabled: true },
+  { name: "send_keys", description: "发送快捷键", risk_level: "moderate", enabled: true },
+  { name: "click_at", description: "点击屏幕坐标", risk_level: "moderate", enabled: false },
+  { name: "web_fetch", description: "抓取网页内容", risk_level: "safe", enabled: true },
+  { name: "web_search", description: "搜索网络", risk_level: "safe", enabled: true },
+  { name: "translate", description: "翻译文本", risk_level: "safe", enabled: true },
+  { name: "calculate", description: "数学计算", risk_level: "safe", enabled: true },
+  { name: "get_time", description: "获取当前时间", risk_level: "safe", enabled: true },
+  { name: "set_reminder", description: "设置提醒", risk_level: "safe", enabled: true },
+  { name: "list_reminders", description: "列出提醒", risk_level: "safe", enabled: true },
+  { name: "cancel_reminder", description: "取消提醒", risk_level: "safe", enabled: true },
+  { name: "qq_read_selection", description: "读取QQ选区消息", risk_level: "safe", enabled: true },
+  { name: "qq_write_draft", description: "写入QQ回复草稿", risk_level: "moderate", enabled: true },
+];
+
 const state = {
   mode: "polish",
   source: MOCK_SOURCE,
@@ -66,13 +126,21 @@ const el = {
   // Tools
   toolsTab: document.getElementById("tools-tab"),
   toolsView: document.getElementById("tools-view"),
-  toolsList: document.getElementById("tools-list"),
+  toolsGrid: document.getElementById("tools-grid"),
   toolsCount: document.getElementById("tools-count"),
+  toolsSearch: document.getElementById("tools-search"),
+  toolsTabs: document.getElementById("tools-tabs"),
+  toolsEmpty: document.getElementById("tools-empty"),
+  // Widgets
+  widgetsGrid: document.getElementById("widgets-grid"),
 };
 
 let qqMessage = "";
 let currentBackend = "local";
 let agentHistoryLoaded = false;
+let toolsCache = [];
+let toolsSearchQuery = "";
+let toolsActiveCat = "all";
 
 // Browser-only examples for visual preview. Real transformations always come
 // from the selected local/cloud model through Tauri.
@@ -435,7 +503,7 @@ function showView(view) {
   if (invoke) {
     invoke("set_panel_focusable", { focusable: !rewrite }).catch(() => {});
   }
-  if (view === "tools") loadTools();
+  if (view === "tools") { loadWidgets(); loadTools(); }
   if (view === "agent") loadAgentHistory();
 }
 
@@ -736,57 +804,219 @@ async function resetAgentChat() {
 
 // ---- Tools management ----
 
+// Browser-preview widgets so the cards are visible without a Tauri backend.
+const MOCK_WIDGETS = [
+  { id: "widget-ocr", label: "屏幕识别", icon: "🔍", shortcut: "Ctrl+Alt+O", description: "框选屏幕区域，OCR 提取文字" },
+  { id: "widget-translate", label: "全屏翻译", icon: "🌐", shortcut: "Ctrl+Alt+T", description: "框选区域识别并翻译" },
+  { id: "widget-colorpicker", label: "取色器", icon: "🎨", shortcut: "Ctrl+Alt+C", description: "屏幕取色，HEX/RGB/HSL" },
+  { id: "widget-weather", label: "天气", icon: "🌤️", shortcut: "", description: "当前天气与 3 日预报" },
+  { id: "widget-calculator", label: "计算器", icon: "🧮", shortcut: "Ctrl+Alt+=", description: "输入即算，支持单位换算" },
+  { id: "widget-clipboard", label: "剪贴板历史", icon: "📋", shortcut: "Ctrl+Alt+V", description: "最近剪贴板记录" },
+];
+
+let widgetsCache = [];
+let widgetsOpenIds = new Set();
+
+async function loadWidgets() {
+  if (!invoke) {
+    renderWidgets(MOCK_WIDGETS);
+    return;
+  }
+  try {
+    const [widgets, openIds] = await Promise.all([
+      invoke("list_widgets"),
+      invoke("list_open_widgets").catch(() => []),
+    ]);
+    widgetsOpenIds = new Set(openIds);
+    renderWidgets(widgets);
+  } catch (err) {
+    el.widgetsGrid.replaceChildren();
+    el.widgetsGrid.textContent = "小工具加载失败: " + err;
+  }
+}
+
+function renderWidgets(widgets) {
+  widgetsCache = widgets;
+  el.widgetsGrid.replaceChildren();
+  for (const w of widgets) {
+    const card = document.createElement("button");
+    card.type = "button";
+    card.className = "widget-card" + (widgetsOpenIds.has(w.id) ? " is-open" : "");
+    card.dataset.widgetId = w.id;
+    card.setAttribute("aria-label", "打开 " + w.label);
+
+    const icon = document.createElement("span");
+    icon.className = "widget-card-icon";
+    icon.textContent = w.icon;
+
+    const body = document.createElement("div");
+    body.className = "widget-card-body";
+    const name = document.createElement("span");
+    name.className = "widget-card-name";
+    name.textContent = w.label;
+    const desc = document.createElement("span");
+    desc.className = "widget-card-desc";
+    desc.textContent = w.description || "";
+    body.append(name, desc);
+
+    card.append(icon, body);
+
+    if (w.shortcut) {
+      const shortcut = document.createElement("span");
+      shortcut.className = "widget-card-shortcut";
+      shortcut.textContent = w.shortcut;
+      card.append(shortcut);
+    }
+
+    el.widgetsGrid.appendChild(card);
+  }
+}
+
+async function openWidgetById(id) {
+  if (!invoke) {
+    showStatus("小工具需要 Tauri 运行环境", "warn");
+    return;
+  }
+  try {
+    await invoke("open_widget", { id });
+    widgetsOpenIds.add(id);
+    // Mark the card as open without a full reload.
+    const card = el.widgetsGrid.querySelector('[data-widget-id="' + CSS.escape(id) + '"]');
+    if (card) card.classList.add("is-open");
+    showStatus("已打开 " + (widgetsCache.find((w) => w.id === id) || {}).label, "ok");
+  } catch (err) {
+    showStatus("打开小工具失败: " + err, "err");
+  }
+}
+
 async function loadTools() {
-  if (!invoke) return;
+  if (!invoke) {
+    // Browser preview: render sample tools so the card grid is visible.
+    renderTools(MOCK_TOOLS);
+    return;
+  }
   try {
     const tools = await invoke("list_tools");
     renderTools(tools);
   } catch (err) {
-    el.toolsList.innerHTML = '<div class="tools-error">加载失败: ' + err + "</div>";
+    toolsCache = [];
+    el.toolsGrid.replaceChildren();
+    el.toolsEmpty.textContent = "加载失败: " + err;
+    el.toolsEmpty.hidden = false;
   }
 }
 
 function renderTools(tools) {
+  toolsCache = tools;
   el.toolsCount.textContent = tools.length;
-  if (!tools.length) {
-    el.toolsList.innerHTML = '<div class="tools-empty">没有已注册的工具</div>';
+  applyToolsFilter();
+}
+
+function applyToolsFilter() {
+  const q = toolsSearchQuery.trim().toLowerCase();
+  const cat = toolsActiveCat;
+  const filtered = toolsCache.filter((t) => {
+    if (cat !== "all" && (TOOL_CATEGORIES[t.name] || "capability") !== cat) return false;
+    if (!q) return true;
+    return t.name.toLowerCase().includes(q) || (t.description || "").toLowerCase().includes(q);
+  });
+
+  el.toolsGrid.replaceChildren();
+  if (!filtered.length) {
+    el.toolsEmpty.textContent = toolsCache.length ? "没有找到匹配的工具" : "没有已注册的工具";
+    el.toolsEmpty.hidden = false;
     return;
   }
-  const riskColors = { safe: "#4ade80", moderate: "#fbbf24", dangerous: "#f87171" };
+  el.toolsEmpty.hidden = true;
+
   const riskLabels = { safe: "安全", moderate: "中等", dangerous: "危险" };
-  el.toolsList.innerHTML = tools
-    .map(
-      (t) => `
-      <div class="tool-card${t.enabled ? "" : " disabled"}">
-        <div class="tool-info">
-          <span class="tool-name">${t.name}</span>
-          <span class="tool-risk risk-${t.risk_level}" style="color:${riskColors[t.risk_level] || "#888"}">${riskLabels[t.risk_level] || t.risk_level}</span>
-        </div>
-        <div class="tool-desc">${t.description}</div>
-        <label class="tool-toggle"><input type="checkbox" ${t.enabled ? "checked" : ""} ${t.risk_level === "dangerous" ? "disabled" : ""} data-tool="${t.name}"> ${t.risk_level === "dangerous" ? "安全锁定" : "启用"}</label>
-      </div>`
-    )
-    .join("");
-  // Wire up toggles
-  el.toolsList.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
-    cb.addEventListener("change", async () => {
-      const name = cb.dataset.tool;
-      const enabled = cb.checked;
-      try {
-        await invoke("toggle_tool", { name, enabled });
-        cb.closest(".tool-card").classList.toggle("disabled", !enabled);
-      } catch (err) {
-        cb.checked = !enabled; // revert
-        showStatus("切换失败: " + err, "err");
-      }
-    });
-  });
+  for (const t of filtered) {
+    const card = document.createElement("div");
+    card.className = "tool-card" + (t.enabled ? "" : " disabled");
+    card.dataset.tool = t.name;
+
+    const head = document.createElement("div");
+    head.className = "tool-card-head";
+    const icon = document.createElement("span");
+    icon.className = "tool-card-icon";
+    icon.textContent = TOOL_ICONS[t.name] || "🔧";
+    const name = document.createElement("span");
+    name.className = "tool-card-name";
+    name.textContent = t.name;
+    name.title = t.description || "";
+    head.append(icon, name);
+
+    const shortcut = TOOL_SHORTCUTS[t.name];
+    let shortcutEl = null;
+    if (shortcut) {
+      shortcutEl = document.createElement("div");
+      shortcutEl.className = "tool-card-shortcut";
+      shortcutEl.textContent = shortcut;
+    }
+
+    const footer = document.createElement("div");
+    footer.className = "tool-card-footer";
+    const badge = document.createElement("span");
+    badge.className = "tool-badge " + (t.risk_level || "safe");
+    badge.textContent = riskLabels[t.risk_level] || t.risk_level || "安全";
+    const toggle = document.createElement("button");
+    toggle.type = "button";
+    toggle.className = "tool-toggle" + (t.enabled ? "" : " off");
+    toggle.dataset.tool = t.name;
+    toggle.dataset.enabled = t.enabled ? "1" : "0";
+    toggle.setAttribute("aria-label", t.enabled ? "禁用" : "启用");
+    if (t.risk_level === "dangerous") toggle.disabled = true;
+    footer.append(badge, toggle);
+
+    card.append(head);
+    if (shortcutEl) card.append(shortcutEl);
+    card.append(footer);
+    el.toolsGrid.appendChild(card);
+  }
 }
 
 el.rewriteTab.addEventListener("click", () => showView("rewrite"));
 el.qqTab.addEventListener("click", () => { showView("qq"); readQqMessage(); });
 el.agentTab.addEventListener("click", () => showView("agent"));
 el.toolsTab.addEventListener("click", () => showView("tools"));
+el.toolsSearch.addEventListener("input", () => {
+  toolsSearchQuery = el.toolsSearch.value;
+  applyToolsFilter();
+});
+el.toolsTabs.addEventListener("click", (e) => {
+  const tab = e.target.closest(".tools-tab");
+  if (!tab) return;
+  for (const t of el.toolsTabs.querySelectorAll(".tools-tab")) t.classList.remove("is-active");
+  tab.classList.add("is-active");
+  toolsActiveCat = tab.dataset.cat;
+  applyToolsFilter();
+});
+el.widgetsGrid.addEventListener("click", (e) => {
+  const card = e.target.closest(".widget-card");
+  if (!card) return;
+  openWidgetById(card.dataset.widgetId);
+});
+el.toolsGrid.addEventListener("click", async (e) => {
+  const toggle = e.target.closest(".tool-toggle");
+  if (!toggle || toggle.disabled) return;
+  const name = toggle.dataset.tool;
+  const newEnabled = toggle.dataset.enabled !== "1";
+  if (invoke) {
+    try {
+      await invoke("toggle_tool", { name, enabled: newEnabled });
+    } catch (err) {
+      showStatus("切换失败: " + err, "err");
+      return;
+    }
+  }
+  toggle.dataset.enabled = newEnabled ? "1" : "0";
+  toggle.classList.toggle("off", !newEnabled);
+  toggle.setAttribute("aria-label", newEnabled ? "禁用" : "启用");
+  const card = toggle.closest(".tool-card");
+  if (card) card.classList.toggle("disabled", !newEnabled);
+  const cached = toolsCache.find((t) => t.name === name);
+  if (cached) cached.enabled = newEnabled;
+});
 el.settingsBtn.addEventListener("click", () => { showView("settings"); loadSettings(); });
 el.providerPreset.addEventListener("change", applyProviderPreset);
 el.saveSettings.addEventListener("click", saveSettings);
@@ -797,7 +1027,11 @@ el.chatSend.addEventListener("click", sendChatMessage);
 el.agentReset.addEventListener("click", resetAgentChat);
 el.chatInput.addEventListener("keydown", (e) => {
   if (e.ctrlKey && e.key === "Enter") {
+    // preventDefault + stopPropagation so the document-level Ctrl+Enter
+    // handler (which calls apply()) does not also fire — that would show
+    // misleading "no captured selection" errors in the chat view.
     e.preventDefault();
+    e.stopPropagation();
     sendChatMessage();
   }
 });
@@ -860,9 +1094,14 @@ function showConfirmDialog(title, message) {
     });
     const keyHandler = (e) => {
       if (e.key === "Escape") {
+        // stopPropagation prevents the document-level Escape handler from
+        // closing the entire overlay panel when the user only meant to
+        // dismiss this dialog.
+        e.stopPropagation();
         document.removeEventListener("keydown", keyHandler, true);
         cleanup(false);
       } else if (e.key === "Enter") {
+        e.stopPropagation();
         document.removeEventListener("keydown", keyHandler, true);
         cleanup(true);
       }

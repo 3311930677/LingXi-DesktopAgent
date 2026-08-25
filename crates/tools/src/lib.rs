@@ -4,6 +4,7 @@
 //! crates (e.g. `lingxi-tools-windows`) implement. The agent engine depends on
 //! this crate to get a uniform interface over all available tools.
 
+pub mod builtin;
 pub mod context;
 pub mod registry;
 pub mod schema;

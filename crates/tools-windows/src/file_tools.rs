@@ -6,6 +6,10 @@ use lingxi_tools::{RiskLevel, Tool, ToolContext};
 use serde_json::json;
 use std::path::Path;
 
+/// Maximum file size we are willing to read into memory (10 MB). Files larger
+/// than this are rejected outright to prevent OOM on multi-GB logs or binaries.
+const MAX_FILE_SIZE: u64 = 10 * 1024 * 1024;
+
 /// Read a text file's contents.
 pub struct ReadFileTool;
 
@@ -14,7 +18,7 @@ impl Tool for ReadFileTool {
     fn schema(&self) -> ToolSchema {
         ToolSchema {
             name: "read_file".into(),
-            description: "读取文本文件的内容。路径可以是绝对路径或相对于工作目录的路径。".into(),
+            description: "读取文本文件的内容。路径可以是绝对路径或相对于工作目录的路径。文件最大 10MB，超出部分会被截断。".into(),
             parameters: json!({
                 "type": "object",
                 "properties": {
@@ -35,8 +39,28 @@ impl Tool for ReadFileTool {
             Ok(path) => path,
             Err(error) => return ToolResult::err(error),
         };
-        match tokio::fs::read_to_string(&full).await {
-            Ok(content) => ToolResult::ok(truncate_utf8(&content, 50_000)),
+
+        // Check the file size before reading to prevent OOM on huge files.
+        // `read_to_string` / `read` would load the entire file into memory.
+        let metadata = match tokio::fs::metadata(&full).await {
+            Ok(m) => m,
+            Err(e) => return ToolResult::err(format!("读取文件元数据失败: {e}")),
+        };
+        if metadata.len() > MAX_FILE_SIZE {
+            return ToolResult::err(format!(
+                "文件过大（{} 字节），最大支持 {} 字节。请使用其他工具处理大文件。",
+                metadata.len(),
+                MAX_FILE_SIZE
+            ));
+        }
+
+        // Read as bytes and decode lossily so binary files don't cause a hard
+        // error — `read_to_string` rejects any non-UTF-8 byte sequence.
+        match tokio::fs::read(&full).await {
+            Ok(bytes) => {
+                let content = String::from_utf8_lossy(&bytes);
+                ToolResult::ok(truncate_utf8(&content, 50_000))
+            }
             Err(e) => ToolResult::err(format!("读取文件失败: {e}")),
         }
     }

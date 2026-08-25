@@ -140,7 +140,11 @@ impl Session {
 
     /// Add the system prompt once, before the first user turn.
     pub fn ensure_system(&mut self, content: impl Into<String>) {
-        if !self.messages.iter().any(|message| message.role == Role::System) {
+        if !self
+            .messages
+            .iter()
+            .any(|message| message.role == Role::System)
+        {
             self.messages.insert(0, Message::system(content));
         }
     }
@@ -189,7 +193,10 @@ impl Session {
 
         let mut start = non_system.len() - max_non_system_messages;
         // A tool result must retain the immediately preceding assistant call.
-        if non_system.get(start).is_some_and(|message| message.role == Role::Tool) {
+        if non_system
+            .get(start)
+            .is_some_and(|message| message.role == Role::Tool)
+        {
             start = start.saturating_sub(1);
         }
         self.messages.clear();

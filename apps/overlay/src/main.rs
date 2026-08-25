@@ -18,6 +18,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod secret_store;
+mod widgets;
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
@@ -38,7 +39,7 @@ use lingxi_agent::{AgentBackend, AgentEngine, AgentRunReport, Session};
 use lingxi_tools::{ConfirmGate, DenyAll, RiskLevel, ToolRegistry};
 use serde::{Deserialize, Serialize};
 use tauri::{
-    menu::{Menu, MenuItem, PredefinedMenuItem},
+    menu::{Menu, MenuItem, PredefinedMenuItem, SubmenuBuilder},
     tray::TrayIconBuilder,
     AppHandle, Manager, PhysicalPosition, PhysicalSize, State, WebviewWindow,
 };
@@ -46,11 +47,29 @@ use windows::Win32::Foundation::{HWND, POINT};
 use windows::Win32::Graphics::Gdi::{
     GetMonitorInfoW, MonitorFromPoint, MONITORINFO, MONITOR_DEFAULTTONEAREST,
 };
-use windows::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture;
-use windows::Win32::UI::WindowsAndMessaging::{
-    GetCursorPos, GetWindowLongPtrW, SendMessageW, SetWindowLongPtrW, GWL_EXSTYLE, HTBOTTOMRIGHT,
-    WM_NCLBUTTONDOWN, WS_EX_NOACTIVATE,
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    RegisterHotKey, ReleaseCapture, UnregisterHotKey, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, VK_O,
+    VK_T, VK_C, VK_V, VK_OEM_PLUS,
 };
+use windows::Win32::UI::WindowsAndMessaging::{
+    GetCursorPos, GetMessageW, GetWindowLongPtrW, SendMessageW, SetWindowLongPtrW, GWL_EXSTYLE,
+    HTBOTTOMRIGHT, MSG, WM_HOTKEY, WM_NCLBUTTONDOWN, WS_EX_NOACTIVATE,
+};
+
+/// Extension trait so every `Mutex::lock().unwrap()` in the app recovers from
+/// poisoning instead of panicking. If one thread panics while holding a lock,
+/// the Mutex becomes "poisoned" and subsequent `.safe_lock()` calls would
+/// cascade-panic — making the entire overlay unusable after a single error.
+/// Recovering the inner data keeps the app running with the last known state.
+trait MutexExt<T> {
+    fn safe_lock(&self) -> std::sync::MutexGuard<'_, T>;
+}
+
+impl<T> MutexExt<T> for Mutex<T> {
+    fn safe_lock(&self) -> std::sync::MutexGuard<'_, T> {
+        self.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+}
 
 /// A preview result cached so "apply" can reuse it instead of running the model
 /// a second time. Storing the exact `(mode, source)` it was computed for lets
@@ -320,7 +339,7 @@ fn persist_agent_session(session: &Session) -> Result<(), String> {
 
 #[tauri::command]
 fn get_backend_settings(state: State<AppState>) -> BackendSettingsView {
-    let settings = state.backend.lock().unwrap();
+    let settings = state.backend.safe_lock();
     BackendSettingsView {
         backend: settings.backend.clone(),
         endpoint: settings.endpoint.clone(),
@@ -343,7 +362,7 @@ fn save_backend_settings(
     {
         return Err("云端 endpoint 和 model 不能为空".into());
     }
-    let mut settings = state.backend.lock().unwrap();
+    let mut settings = state.backend.safe_lock();
     settings.backend = input.backend;
     settings.endpoint = input.endpoint.trim().trim_end_matches('/').to_string();
     settings.model = input.model.trim().to_string();
@@ -374,7 +393,7 @@ fn save_backend_settings(
         remember_api_key: settings.remember_api_key,
     };
     drop(settings);
-    *state.last_preview.lock().unwrap() = None;
+    *state.last_preview.safe_lock() = None;
     if start_local {
         assistant_inference::prepare_in_background();
     }
@@ -388,7 +407,7 @@ fn model_progress() -> assistant_inference::ProgressSnapshot {
 
 #[tauri::command]
 fn pet_status(state: State<AppState>) -> String {
-    state.pet_status.lock().unwrap().clone()
+    state.pet_status.safe_lock().clone()
 }
 
 #[tauri::command]
@@ -396,7 +415,7 @@ fn set_pet_status(state: State<AppState>, status: String) -> Result<(), String> 
     if !matches!(status.as_str(), "idle" | "thinking" | "speaking" | "alert") {
         return Err("invalid pet status".into());
     }
-    *state.pet_status.lock().unwrap() = status;
+    *state.pet_status.safe_lock() = status;
     Ok(())
 }
 
@@ -492,20 +511,23 @@ async fn generate_qq_draft(state: State<'_, AppState>, message: String) -> Resul
     if message.trim().is_empty() {
         return Err("没有可回复的 QQ 消息".into());
     }
-    let settings = state.backend.lock().unwrap().clone();
-    *state.pet_status.lock().unwrap() = "thinking".into();
+    let settings = state.backend.safe_lock().clone();
+    *state.pet_status.safe_lock() = "thinking".into();
+    // Flatten JoinError and model error into one Result so the match below
+    // resets pet_status on every failure path (including task panic).
     let draft = tauri::async_runtime::spawn_blocking(move || {
         run_model(&settings, ModelTask::ChatReply, &message)
     })
     .await
-    .map_err(|error| format!("draft task failed: {error}"))?;
+    .map_err(|error| format!("draft task failed: {error}"))
+    .and_then(|inner| inner);
     match draft {
         Ok(draft) => {
-            *state.pet_status.lock().unwrap() = "speaking".into();
+            *state.pet_status.safe_lock() = "speaking".into();
             Ok(draft)
         }
         Err(error) => {
-            *state.pet_status.lock().unwrap() = "idle".into();
+            *state.pet_status.safe_lock() = "idle".into();
             Err(error)
         }
     }
@@ -542,7 +564,7 @@ async fn agent_chat(
     state: State<'_, AppState>,
     message: String,
 ) -> Result<AgentRunReport, String> {
-    let settings = state.backend.lock().unwrap().clone();
+    let settings = state.backend.safe_lock().clone();
     if settings.backend != "cloud" {
         return Err("Agent 对话暂需云端模型，请在模型设置中切换到 OpenAI 兼容云端。".into());
     }
@@ -563,7 +585,7 @@ async fn agent_chat(
     let mut registry = ToolRegistry::new();
     lingxi_tools_windows::register_default_tools(&mut registry);
     {
-        let reg = state.tool_registry.lock().unwrap();
+        let reg = state.tool_registry.safe_lock();
         for schema in reg.all_schemas() {
             if !reg.is_enabled(&schema.name) {
                 registry.set_enabled(&schema.name, false);
@@ -577,17 +599,25 @@ async fn agent_chat(
     // defense in depth against accidental shell/file mutations.
     let confirm = std::sync::Arc::new(DenyAll) as std::sync::Arc<dyn ConfirmGate>;
 
-    // Take the session out of the Mutex so we can hold it across .await
-    // without the MutexGuard blocking Send.
-    let mut session = std::mem::take(&mut *state.agent_session.lock().unwrap());
+    // Clone the session so we never lose the original if the future is
+    // cancelled or panics. A cheap deep copy is far safer than `mem::take`,
+    // which would replace the Mutex contents with `Session::default()` and
+    // lose all user history if the awaited future is dropped.
+    let mut session = state.agent_session.safe_lock().clone();
     let result = engine.run_with_trace(&message, &mut session, confirm).await;
     // Persist and restore the session regardless of model success so the user
     // does not lose prior turns after a transient network error.
     let persist_result = persist_agent_session(&session);
-    *state.agent_session.lock().unwrap() = session;
+    // Only write back on success to avoid clobbering good history with a
+    // partial/corrupted session from a failed run.
+    if result.is_ok() {
+        *state.agent_session.safe_lock() = session;
+    }
 
     let report = result.map_err(|e| e.to_string())?;
-    persist_result?;
+    if let Err(e) = persist_result {
+        eprintln!("[lingxi] warning: failed to persist agent session: {e}");
+    }
     Ok(report)
 }
 
@@ -630,14 +660,14 @@ fn agent_reset(state: State<AppState>) -> Result<(), String> {
         default_agent_working_dir(),
     );
     persist_agent_session(&session)?;
-    *state.agent_session.lock().unwrap() = session;
+    *state.agent_session.safe_lock() = session;
     Ok(())
 }
 
 /// List all registered tools with their metadata.
 #[tauri::command]
 fn list_tools(state: State<AppState>) -> Vec<ToolView> {
-    let reg = state.tool_registry.lock().unwrap();
+    let reg = state.tool_registry.safe_lock();
     reg.all_schemas()
         .iter()
         .map(|s| {
@@ -655,7 +685,7 @@ fn list_tools(state: State<AppState>) -> Vec<ToolView> {
 /// Enable or disable a tool by name.
 #[tauri::command]
 fn toggle_tool(state: State<AppState>, name: String, enabled: bool) -> Result<(), String> {
-    let mut reg = state.tool_registry.lock().unwrap();
+    let mut reg = state.tool_registry.safe_lock();
     let risk = reg
         .risk_of(&name)
         .ok_or_else(|| format!("未知工具: {name}"))?;
@@ -700,7 +730,7 @@ async fn preview_transform(
     mode: String,
     text: String,
 ) -> Result<PreviewResult, String> {
-    let settings = state.backend.lock().unwrap().clone();
+    let settings = state.backend.safe_lock().clone();
     let is_model_task = model_task(&mode).is_some();
     let pending = is_model_task && settings.backend == "local" && !assistant_inference::is_ready();
     if pending {
@@ -712,23 +742,35 @@ async fn preview_transform(
         });
     }
 
-    *state.pet_status.lock().unwrap() = "thinking".into();
+    *state.pet_status.safe_lock() = "thinking".into();
     let transformed = {
         let mode = mode.clone();
         let text = text.clone();
         tauri::async_runtime::spawn_blocking(move || transform_text(&settings, &mode, &text))
             .await
-            .map_err(|error| format!("preview task failed: {error}"))??
+            .map_err(|error| format!("preview task failed: {error}"))
+            .and_then(|inner| inner)
     };
-    *state.pet_status.lock().unwrap() = "speaking".into();
+    let transformed = match transformed {
+        Ok(t) => {
+            *state.pet_status.safe_lock() = "speaking".into();
+            t
+        }
+        Err(e) => {
+            // Reset pet status on any error (task panic or model failure) so
+            // the pet is not stuck in "thinking" forever after a transient error.
+            *state.pet_status.safe_lock() = "idle".into();
+            return Err(e);
+        }
+    };
 
     let warning = model_task(&mode)
         .and_then(|task| assistant_inference::quality_warning(task, &text, &transformed));
     let diff = to_segments(diff_chars(&text, &transformed));
-    let settings = state.backend.lock().unwrap().clone();
+    let settings = state.backend.safe_lock().clone();
     // Cache this result so a subsequent `apply` for the same mode/source/backend
     // writes back exactly what the user saw, without re-running the model.
-    *state.last_preview.lock().unwrap() = Some(CachedPreview {
+    *state.last_preview.safe_lock() = Some(CachedPreview {
         mode,
         source: text,
         backend_signature: backend_signature(&settings),
@@ -761,9 +803,9 @@ async fn apply_transform(state: State<'_, AppState>, mode: String) -> Result<(),
 
     // Fast path: reuse the preview the user actually saw, if it was computed for
     // this exact mode, selection text and model backend configuration.
-    let settings = state.backend.lock().unwrap().clone();
+    let settings = state.backend.safe_lock().clone();
     let signature = backend_signature(&settings);
-    let cached = state.last_preview.lock().unwrap().clone();
+    let cached = state.last_preview.safe_lock().clone();
     let new_text = match cached {
         Some(preview)
             if preview.mode == mode
@@ -784,7 +826,7 @@ async fn apply_transform(state: State<'_, AppState>, mode: String) -> Result<(),
     let receipt = adapter
         .write_back(&snapshot, &new_text)
         .map_err(|e| e.to_string())?;
-    *state.last_receipt.lock().unwrap() = Some(receipt);
+    *state.last_receipt.safe_lock() = Some(receipt);
     Ok(())
 }
 
@@ -799,7 +841,7 @@ fn undo_last(state: State<AppState>) -> Result<(), String> {
         .ok_or("nothing to undo")?;
     let adapter = WindowsAdapter::new();
     adapter.undo(&receipt).map_err(|e| e.to_string())?;
-    *state.last_receipt.lock().unwrap() = None;
+    *state.last_receipt.safe_lock() = None;
     Ok(())
 }
 
@@ -812,7 +854,7 @@ fn hide_overlay(app: AppHandle, state: State<AppState>) {
     if let Some(pet) = app.get_webview_window("pet") {
         let _ = pet.show();
     }
-    *state.pet_status.lock().unwrap() = "idle".into();
+    *state.pet_status.safe_lock() = "idle".into();
 }
 
 /// Quit the entire LingXi process (called by the "退出灵犀" button).
@@ -882,14 +924,81 @@ fn spawn_hotkey_worker(app: AppHandle) {
     });
 }
 
+/// Widget hotkey IDs. Each widget with a global shortcut gets its own ID,
+/// registered on a dedicated background thread so it cannot interfere with the
+/// assistant transform/undo hotkey loop.
+const WIDGET_HK_OCR: i32 = 0x10;
+const WIDGET_HK_TRANSLATE: i32 = 0x11;
+const WIDGET_HK_COLORPICKER: i32 = 0x12;
+const WIDGET_HK_CLIPBOARD: i32 = 0x13;
+const WIDGET_HK_CALCULATOR: i32 = 0x14;
+
+/// Register widget global shortcuts on a background thread and pump messages.
+///
+/// Each widget's shortcut (from its `WidgetManifest.shortcut`) is mapped to a
+/// fixed hotkey ID; the message loop dispatches back to `widgets::open_widget`.
+/// Failures to register individual hotkeys are logged but do not abort the
+/// loop, since another app may already own the key combination.
+fn spawn_widget_hotkey_worker(app: AppHandle) {
+    thread::spawn(move || {
+        let modifiers = MOD_CONTROL | MOD_ALT | MOD_NOREPEAT;
+        // (id, vk, widget_id) — keep in sync with `WidgetManifest.shortcut`.
+        let bindings: [(i32, u16, &str); 5] = [
+            (WIDGET_HK_OCR, VK_O.0, "widget-ocr"),
+            (WIDGET_HK_TRANSLATE, VK_T.0, "widget-translate"),
+            (WIDGET_HK_COLORPICKER, VK_C.0, "widget-colorpicker"),
+            (WIDGET_HK_CLIPBOARD, VK_V.0, "widget-clipboard"),
+            (WIDGET_HK_CALCULATOR, VK_OEM_PLUS.0, "widget-calculator"),
+        ];
+
+        let mut registered: Vec<i32> = Vec::new();
+        for (id, vk, _) in &bindings {
+            match unsafe { RegisterHotKey(None, *id, modifiers, (*vk).into()) } {
+                Ok(_) => registered.push(*id),
+                Err(e) => eprintln!("[lingxi] widget hotkey {id} register failed: {e}"),
+            }
+        }
+
+        let mut msg = MSG::default();
+        loop {
+            let ret = unsafe { GetMessageW(&mut msg, None, 0, 0) };
+            if ret.0 <= 0 {
+                break;
+            }
+            if msg.message == WM_HOTKEY {
+                let id = msg.wParam.0 as i32;
+                if let Some((_, _, widget_id)) = bindings.iter().find(|(hid, _, _)| *hid == id) {
+                    if let Some(manifest) = widgets::builtin_widgets()
+                        .into_iter()
+                        .find(|w| w.id == *widget_id)
+                    {
+                        let app = app.clone();
+                        // Open on the main thread so Tauri can manipulate
+                        // windows; spawning avoids blocking the message pump.
+                        tauri::async_runtime::spawn(async move {
+                            if let Err(e) = widgets::open_widget(&app, &manifest) {
+                                eprintln!("[lingxi] open widget from hotkey: {e}");
+                            }
+                        });
+                    }
+                }
+            }
+        }
+
+        for id in &registered {
+            let _ = unsafe { UnregisterHotKey(None, *id) };
+        }
+    });
+}
+
 fn on_transform(app: &AppHandle) {
     let adapter = WindowsAdapter::new();
     match adapter.capture_selection() {
         Ok(snapshot) => {
             let state = app.state::<AppState>();
-            *state.snapshot.lock().unwrap() = Some(snapshot);
+            *state.snapshot.safe_lock() = Some(snapshot);
             state.selection_revision.fetch_add(1, Ordering::AcqRel);
-            *state.last_preview.lock().unwrap() = None;
+            *state.last_preview.safe_lock() = None;
             if let Some(pet) = app.get_webview_window("pet") {
                 let _ = pet.hide();
             }
@@ -968,11 +1077,11 @@ fn position_pet(window: &WebviewWindow) {
 
 fn on_undo(app: &AppHandle) {
     let state = app.state::<AppState>();
-    let receipt = state.last_receipt.lock().unwrap().clone();
+    let receipt = state.last_receipt.safe_lock().clone();
     if let Some(receipt) = receipt {
         let adapter = WindowsAdapter::new();
         let _ = adapter.undo(&receipt);
-        *state.last_receipt.lock().unwrap() = None;
+        *state.last_receipt.safe_lock() = None;
     }
 }
 
@@ -1097,7 +1206,7 @@ mod removed_ime_hook {
     /// Poll IME state (called by the frontend every ~30ms).
     #[tauri::command]
     fn ime_state() -> ImeStateView {
-        let s = ime_shared().lock().unwrap();
+        let s = ime_shared().safe_lock();
         ImeStateView {
             active: s.active,
             pinyin: s.pinyin.clone(),
@@ -1110,7 +1219,7 @@ mod removed_ime_hook {
     /// the hook; the worker performs the actual paste without stealing focus.
     #[tauri::command]
     fn ime_commit(index: usize) -> Result<(), String> {
-        let mut s = ime_shared().lock().unwrap();
+        let mut s = ime_shared().safe_lock();
         let text = s
             .candidates
             .get(index)
@@ -1127,7 +1236,7 @@ mod removed_ime_hook {
     /// Toggle IME mode on/off.
     #[tauri::command]
     fn ime_toggle() -> bool {
-        let mut s = ime_shared().lock().unwrap();
+        let mut s = ime_shared().safe_lock();
         s.active = !s.active;
         if !s.active {
             s.pinyin.clear();
@@ -1228,7 +1337,7 @@ mod removed_ime_hook {
             let mut seen_revision = u64::MAX;
             let mut visible = false;
             loop {
-                let pending = shared.lock().unwrap().pending_commit.take();
+                let pending = shared.safe_lock().pending_commit.take();
                 if let Some(text) = pending {
                     if let Err(error) = insert_text_at_caret(&text) {
                         eprintln!("IME commit failed: {error}");
@@ -1236,7 +1345,7 @@ mod removed_ime_hook {
                 }
 
                 let (active, revision, pinyin, context) = {
-                    let s = shared.lock().unwrap();
+                    let s = shared.safe_lock();
                     (
                         s.active,
                         s.revision,
@@ -1255,7 +1364,7 @@ mod removed_ime_hook {
                     seen_revision = revision;
                 } else if revision != seen_revision {
                     let (candidates, server_connected) = compute_candidates(&pinyin, &context);
-                    let mut s = shared.lock().unwrap();
+                    let mut s = shared.safe_lock();
                     // Discard a stale server response if another key arrived.
                     if s.active && s.revision == revision && s.pinyin == pinyin {
                         s.candidates = candidates;
@@ -1347,13 +1456,13 @@ mod removed_ime_hook {
         }
 
         let shared = ime_shared();
-        if !shared.lock().unwrap().active || wparam.0 != 0x0100 {
+        if !shared.safe_lock().active || wparam.0 != 0x0100 {
             return CallNextHookEx(None, code, wparam, lparam);
         }
 
         let vk = kb.vkCode as u16;
         let handled = {
-            let mut s = shared.lock().unwrap();
+            let mut s = shared.safe_lock();
             if (0x41..=0x5A).contains(&vk) {
                 s.pinyin.push((vk as u8 as char).to_ascii_lowercase());
                 s.candidates.clear();
@@ -1417,7 +1526,7 @@ mod removed_ime_hook {
 
     fn on_ime(app: &AppHandle) {
         let active = {
-            let mut s = ime_shared().lock().unwrap();
+            let mut s = ime_shared().safe_lock();
             s.active = !s.active;
             s.pinyin.clear();
             s.candidates.clear();
@@ -1439,6 +1548,512 @@ mod removed_ime_hook {
     }
 }
 
+// ===========================================================================
+// Widget Tauri commands — each widget is a small independent window.
+// ===========================================================================
+
+#[tauri::command]
+fn list_widgets() -> Vec<widgets::WidgetManifest> {
+    widgets::builtin_widgets()
+}
+
+#[tauri::command]
+fn open_widget(app: AppHandle, id: String) -> Result<(), String> {
+    let manifest = widgets::builtin_widgets()
+        .into_iter()
+        .find(|w| w.id == id)
+        .ok_or_else(|| format!("未知小工具: {id}"))?;
+    widgets::open_widget(&app, &manifest).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn close_widget(app: AppHandle, id: String) -> Result<(), String> {
+    widgets::close_widget(&app, &id).map_err(|e| e.to_string())
+}
+
+/// Return the ids of widget windows currently open. Used by the tools grid to
+/// mark already-open widgets without re-querying all webview windows.
+#[tauri::command]
+fn list_open_widgets(app: AppHandle) -> Vec<String> {
+    widgets::open_widget_ids(&app)
+}
+
+/// Capture the full screen and return as a PNG data URL.
+///
+/// Runs on a blocking thread (spawn_blocking) so the widget WebView does not
+/// freeze while BitBlt + PNG encode runs. A 10s timeout guards against GDI hangs.
+#[tauri::command]
+async fn widget_capture_screen() -> Result<serde_json::Value, String> {
+    #[cfg(windows)]
+    {
+        let result = tauri::async_runtime::spawn_blocking(|| {
+            lingxi_tools_windows::screen_capture::capture_screen_as_data_url()
+        })
+        .await
+        .map_err(|e| format!("截图任务失败: {e}"))?;
+        let url = tokio::time::timeout(Duration::from_secs(10), async move { result })
+            .await
+            .map_err(|_| "截图超时（10秒）".to_string())?;
+        url.map(|u| serde_json::json!({ "image": u }))
+    }
+    #[cfg(not(windows))]
+    {
+        Err("仅支持 Windows".to_string())
+    }
+}
+
+/// Capture a screen region and run OCR on it.
+///
+/// OCR launches PowerShell + WinRT OcrEngine which takes 2-6 seconds. Running
+/// this on the main thread would freeze the widget window; spawn_blocking +
+/// 20s timeout keeps the UI responsive and prevents indefinite hangs.
+#[tauri::command]
+async fn widget_ocr(x: i32, y: i32, w: i32, h: i32) -> Result<serde_json::Value, String> {
+    #[cfg(windows)]
+    {
+        let result = tauri::async_runtime::spawn_blocking(move || {
+            // First capture the region as a data URL so the frontend can display it.
+            let data_url = lingxi_tools_windows::screen_capture::capture_region_as_data_url(x, y, w, h)?;
+
+            // Try WinRT OCR via PowerShell (Windows 10+ has built-in OCR).
+            let temp_path = std::env::temp_dir().join("lingxi_ocr_temp.png");
+            let png_data = lingxi_tools_windows::screen_capture::capture_region(x, y, w, h)?;
+            let png_bytes = lingxi_tools_windows::screen_capture::encode_png(&png_data)?;
+            std::fs::write(&temp_path, &png_bytes).map_err(|e| format!("写入临时文件失败: {e}"))?;
+
+            let script = format!(
+                r#"
+            Add-Type -AssemblyName System.Windows.Media
+            $bmp = [System.Windows.Media.Imaging.BitmapFrame]::Create([System.IO.File]::OpenRead('{}'))
+            $engine = [Windows.Media.Ocr.OcrEngine]::TryCreateFromLanguage([Windows.Globalization.Language]::CreateLanguage('zh-Hans-CN'))
+            if (-not $engine) {{ $engine = [Windows.Media.Ocr.OcrEngine]::TryCreateFromUserProfileLanguages() }}
+            if (-not $engine) {{ Write-Output ''; exit }}
+            $result = $engine.RecognizeAsync($bmp).AwaitResult()
+            Write-Output $result.Text
+            "#,
+                temp_path.display()
+            );
+
+            let output = std::process::Command::new("powershell")
+                .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+                .output();
+
+            let text = match output {
+                Ok(out) => String::from_utf8_lossy(&out.stdout).trim().to_string(),
+                Err(_) => String::new(),
+            };
+
+            let _ = std::fs::remove_file(&temp_path);
+
+            Ok::<_, String>(serde_json::json!({
+                "text": text,
+                "image": data_url,
+            }))
+        })
+        .await
+        .map_err(|e| format!("OCR 任务失败: {e}"))?;
+        tokio::time::timeout(Duration::from_secs(20), async move { result })
+            .await
+            .map_err(|_| "OCR 超时（20秒），WinRT OCR 引擎可能未安装".to_string())?
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (x, y, w, h);
+        Err("仅支持 Windows".to_string())
+    }
+}
+
+/// Read the pixel color at the current cursor position.
+#[tauri::command]
+async fn widget_pick_color() -> Result<serde_json::Value, String> {
+    #[cfg(windows)]
+    {
+        tauri::async_runtime::spawn_blocking(|| {
+            // GetCursorPos and POINT are already imported at the top of this file.
+            let mut point = POINT::default();
+            unsafe { GetCursorPos(&mut point).map_err(|e| format!("GetCursorPos: {e}"))? };
+            let (r, g, b) = lingxi_tools_windows::screen_capture::read_pixel(point.x, point.y)?;
+            Ok(serde_json::json!({ "r": r, "g": g, "b": b }))
+        })
+        .await
+        .map_err(|e| format!("取色任务失败: {e}"))?
+    }
+    #[cfg(not(windows))]
+    {
+        Err("仅支持 Windows".to_string())
+    }
+}
+
+/// Fetch weather from Open-Meteo (free, no API key required).
+///
+/// Location resolution order: explicit city name (geocoding API) → IP
+/// geolocation (ip-api.com works in mainland China, ipapi.co as fallback) →
+/// default Beijing. Each HTTP call has a 10s PowerShell timeout; the overall
+/// timeout wraps the blocking task so the widget can never hang.
+#[tauri::command]
+async fn widget_get_weather(city: Option<String>) -> Result<serde_json::Value, String> {
+    let city = city
+        .map(|c| c.trim().to_string())
+        .filter(|c| !c.is_empty());
+    let task = tauri::async_runtime::spawn_blocking(move || {
+        let (lat, lon, city_label) = match &city {
+            Some(name) => geocode_city(name)?,
+            None => locate_by_ip(),
+        };
+
+        let url = format!(
+            "https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current_weather=true&daily=weather_code,temperature_2m_max,temperature_2m_min,relative_humidity_2m_max,wind_speed_10m_max&timezone=auto"
+        );
+        let resp = http_get_text(&url)?;
+        let data: serde_json::Value = serde_json::from_str(&resp)
+            .map_err(|e| format!("解析天气失败: {e}"))?;
+
+        let cw = data.get("current_weather").ok_or("无当前天气数据")?;
+        let daily = data.get("daily").ok_or("无预报数据")?;
+
+        let weather_code = cw.get("weather_code").and_then(|v| v.as_i64()).unwrap_or(0);
+        let description = weather_description(weather_code);
+
+        let mut forecast = Vec::new();
+        if let Some(dates) = daily.get("time").and_then(|v| v.as_array()) {
+            if let Some(codes) = daily.get("weather_code").and_then(|v| v.as_array()) {
+                if let Some(maxs) = daily.get("temperature_2m_max").and_then(|v| v.as_array()) {
+                    if let Some(mins) = daily.get("temperature_2m_min").and_then(|v| v.as_array()) {
+                        for i in 0..dates.len().min(3) {
+                            forecast.push(serde_json::json!({
+                                "date": dates[i].as_str().unwrap_or(""),
+                                "weather_code": codes[i].as_i64().unwrap_or(0),
+                                "max": maxs[i].as_f64().unwrap_or(0.0),
+                                "min": mins[i].as_f64().unwrap_or(0.0),
+                            }));
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok::<_, String>(serde_json::json!({
+            "city": city_label,
+            "current": {
+                "temperature": cw.get("temperature").and_then(|v| v.as_f64()).unwrap_or(0.0),
+                "weather_code": weather_code,
+                "description": description,
+                "wind_speed": cw.get("windspeed").and_then(|v| v.as_f64()).unwrap_or(0.0),
+                "humidity": daily.get("relative_humidity_2m_max")
+                    .and_then(|v| v.as_array())
+                    .and_then(|a| a.first())
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(0),
+            },
+            "daily": forecast,
+        }))
+    });
+    // The timeout must wrap the blocking task itself — the old code awaited
+    // first and timed out on an already-finished future, so a hung PowerShell
+    // request froze the widget forever.
+    tokio::time::timeout(Duration::from_secs(30), task)
+        .await
+        .map_err(|_| "天气查询超时（30秒），请检查网络".to_string())?
+        .map_err(|e| format!("天气任务失败: {e}"))?
+}
+
+/// Evaluate a mathematical expression.
+#[tauri::command]
+async fn widget_calculate(expression: String) -> Result<serde_json::Value, String> {
+    use lingxi_tools::{builtin::calc::CalculateTool, Tool, ToolContext, AutoConfirm};
+    let tool = CalculateTool;
+    let ctx = ToolContext {
+        working_dir: std::env::current_dir().unwrap_or_default(),
+        confirm: std::sync::Arc::new(AutoConfirm),
+        session_id: String::new(),
+    };
+    let result = tokio::time::timeout(
+        Duration::from_secs(5),
+        tool.execute(serde_json::json!({ "expression": expression }), &ctx),
+    )
+    .await
+    .map_err(|_| "计算超时（5秒）".to_string())?;
+    if result.success {
+        Ok(serde_json::json!({ "result": result.output.trim() }))
+    } else {
+        Err(result.output)
+    }
+}
+
+/// Translate text using the built-in translate tool.
+#[tauri::command]
+async fn widget_translate(text: String, from: String, to: String) -> Result<serde_json::Value, String> {
+    use lingxi_tools::{builtin::translate::TranslateTool, Tool, ToolContext, AutoConfirm};
+    let tool = TranslateTool;
+    let ctx = ToolContext {
+        working_dir: std::env::current_dir().unwrap_or_default(),
+        confirm: std::sync::Arc::new(AutoConfirm),
+        session_id: String::new(),
+    };
+    let params = serde_json::json!({ "text": text, "from": from, "to": to });
+    let result = tokio::time::timeout(
+        Duration::from_secs(15),
+        tool.execute(params, &ctx),
+    )
+    .await
+    .map_err(|_| "翻译超时（15秒）".to_string())?;
+    if result.success {
+        Ok(serde_json::json!({ "translated": result.output.trim() }))
+    } else {
+        Err(result.output)
+    }
+}
+
+/// Capture screen, let user select region, OCR and translate in one step.
+#[tauri::command]
+async fn widget_capture_and_translate(target_lang: String) -> Result<serde_json::Value, String> {
+    #[cfg(windows)]
+    {
+        // OCR on a blocking thread (PowerShell + WinRT takes seconds).
+        let source = tauri::async_runtime::spawn_blocking(|| {
+            let img = lingxi_tools_windows::screen_capture::capture_screen()?;
+            let temp_path = std::env::temp_dir().join("lingxi_ocr_translate.png");
+            let png_bytes = lingxi_tools_windows::screen_capture::encode_png(&img)?;
+            std::fs::write(&temp_path, &png_bytes).map_err(|e| format!("写入临时文件失败: {e}"))?;
+
+            let script = format!(
+                r#"
+            Add-Type -AssemblyName System.Windows.Media
+            $bmp = [System.Windows.Media.Imaging.BitmapFrame]::Create([System.IO.File]::OpenRead('{}'))
+            $engine = [Windows.Media.Ocr.OcrEngine]::TryCreateFromUserProfileLanguages()
+            if (-not $engine) {{ Write-Output ''; exit }}
+            $result = $engine.RecognizeAsync($bmp).AwaitResult()
+            Write-Output $result.Text
+            "#,
+                temp_path.display()
+            );
+
+            let output = std::process::Command::new("powershell")
+                .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+                .output();
+            let _ = std::fs::remove_file(&temp_path);
+            Ok::<_, String>(match output {
+                Ok(out) => String::from_utf8_lossy(&out.stdout).trim().to_string(),
+                Err(_) => String::new(),
+            })
+        })
+        .await
+        .map_err(|e| format!("截图翻译任务失败: {e}"))??;
+
+        if source.is_empty() {
+            return Ok(serde_json::json!({
+                "source": "",
+                "translated": "(未识别到文字)",
+            }));
+        }
+
+        // Translate the recognized text.
+        let translated = match widget_translate(source.clone(), "auto".into(), target_lang).await {
+            Ok(v) => v.get("translated").and_then(|t| t.as_str()).unwrap_or("").to_string(),
+            Err(e) => format!("翻译失败: {e}"),
+        };
+
+        Ok(serde_json::json!({
+            "source": source,
+            "translated": translated,
+        }))
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = target_lang;
+        Err("仅支持 Windows".to_string())
+    }
+}
+
+/// In-memory clipboard history (per app session).
+static CLIPBOARD_HISTORY: std::sync::OnceLock<Mutex<Vec<ClipboardEntry>>> = std::sync::OnceLock::new();
+
+#[derive(Clone, serde::Serialize)]
+struct ClipboardEntry {
+    text: String,
+    time: String,
+}
+
+fn clipboard_history() -> &'static Mutex<Vec<ClipboardEntry>> {
+    CLIPBOARD_HISTORY.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+#[tauri::command]
+fn widget_clipboard_history() -> Result<Vec<ClipboardEntry>, String> {
+    let history = clipboard_history().lock().map_err(|e| format!("锁失败: {e}"))?;
+    Ok(history.clone())
+}
+
+#[tauri::command]
+fn widget_clipboard_write(text: String) -> Result<(), String> {
+    use assistant_windows::write_clipboard_text;
+    let now = chrono_like_now();
+    let mut history = clipboard_history().lock().map_err(|e| format!("锁失败: {e}"))?;
+    // Avoid duplicates of consecutive identical entries.
+    if history.last().map(|e| e.text == text).unwrap_or(false) {
+        return Ok(());
+    }
+    history.insert(0, ClipboardEntry { text: text.clone(), time: now });
+    if history.len() > 50 {
+        history.truncate(50);
+    }
+    drop(history);
+    write_clipboard_text(&text).map_err(|e| format!("写入剪贴板失败: {e}"))
+}
+
+#[tauri::command]
+fn widget_clipboard_clear() -> Result<(), String> {
+    let mut history = clipboard_history().lock().map_err(|e| format!("锁失败: {e}"))?;
+    history.clear();
+    Ok(())
+}
+
+/// Read current system clipboard text (for clipboard-history polling).
+#[tauri::command]
+fn widget_read_clipboard() -> Result<String, String> {
+    use assistant_windows::read_clipboard_text;
+    read_clipboard_text().map_err(|e| format!("读取剪贴板失败: {e}"))
+}
+
+// --- Helpers for widget commands ---
+
+fn http_get_text(url: &str) -> Result<String, String> {
+    // -TimeoutSec is critical: without it Invoke-RestMethod waits forever on
+    // stalled connections, which froze the weather widget.
+    let cmd = format!(
+        "(Invoke-RestMethod -Uri '{}' -UseBasicParsing -TimeoutSec 10) | ConvertTo-Json -Depth 10 -Compress",
+        url
+    );
+    let output = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command"])
+        .arg(&cmd)
+        .output()
+        .map_err(|e| format!("HTTP 请求失败: {e}"))?;
+
+    if !output.status.success() {
+        let err = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("HTTP 请求错误: {}", err.trim()));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    // PowerShell sometimes wraps strings in quotes; unwrap them.
+    if stdout.starts_with('"') && stdout.ends_with('"') {
+        Ok(stdout[1..stdout.len()-1].replace("\\\"", "\""))
+    } else {
+        Ok(stdout)
+    }
+}
+
+/// Minimal percent-encoding for URL query values (UTF-8, non-ASCII included).
+fn url_encode(s: &str) -> String {
+    let mut out = String::new();
+    for b in s.as_bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(*b as char)
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
+/// Resolve a city name (Chinese OK) to coordinates via Open-Meteo geocoding.
+fn geocode_city(name: &str) -> Result<(f64, f64, String), String> {
+    let url = format!(
+        "https://geocoding-api.open-meteo.com/v1/search?name={}&count=1&language=zh&format=json",
+        url_encode(name)
+    );
+    let body = http_get_text(&url)?;
+    let v: serde_json::Value =
+        serde_json::from_str(&body).map_err(|e| format!("解析城市数据失败: {e}"))?;
+    let first = v
+        .get("results")
+        .and_then(|r| r.as_array())
+        .and_then(|a| a.first())
+        .ok_or_else(|| format!("未找到城市「{name}」，请换个名称试试"))?;
+    let lat = first
+        .get("latitude")
+        .and_then(|x| x.as_f64())
+        .ok_or("城市坐标无效")?;
+    let lon = first
+        .get("longitude")
+        .and_then(|x| x.as_f64())
+        .ok_or("城市坐标无效")?;
+    let label = first
+        .get("name")
+        .and_then(|x| x.as_str())
+        .unwrap_or(name)
+        .to_string();
+    Ok((lat, lon, label))
+}
+
+/// IP geolocation with a fallback chain. ipapi.co returns 403 from mainland
+/// China, so try ip-api.com first (returns Chinese city names). Never fails:
+/// falls back to Beijing so the weather widget always shows something.
+fn locate_by_ip() -> (f64, f64, String) {
+    if let Ok(body) = http_get_text("http://ip-api.com/json/?lang=zh-CN") {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&body) {
+            let ok = v.get("status").and_then(|s| s.as_str()) == Some("success");
+            let lat = v.get("lat").and_then(|x| x.as_f64());
+            let lon = v.get("lon").and_then(|x| x.as_f64());
+            if ok {
+                if let (Some(lat), Some(lon)) = (lat, lon) {
+                    let city = v
+                        .get("city")
+                        .and_then(|x| x.as_str())
+                        .or_else(|| v.get("regionName").and_then(|x| x.as_str()))
+                        .unwrap_or("当前位置");
+                    return (lat, lon, city.to_string());
+                }
+            }
+        }
+    }
+    if let Ok(body) = http_get_text("https://ipapi.co/json/") {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&body) {
+            let lat = v.get("latitude").and_then(|x| x.as_f64());
+            let lon = v.get("longitude").and_then(|x| x.as_f64());
+            if let (Some(lat), Some(lon)) = (lat, lon) {
+                let city = v.get("city").and_then(|x| x.as_str()).unwrap_or("当前位置");
+                return (lat, lon, city.to_string());
+            }
+        }
+    }
+    (39.9, 116.4, "北京（默认）".to_string())
+}
+
+fn weather_description(code: i64) -> &'static str {
+    match code {
+        0 => "晴朗",
+        1 => "大部晴朗",
+        2 => "多云",
+        3 => "阴天",
+        45 | 48 => "雾",
+        51 | 53 | 55 => "毛毛雨",
+        56 | 57 => "冻毛毛雨",
+        61 | 63 | 65 => "雨",
+        66 | 67 => "冻雨",
+        71 | 73 | 75 => "雪",
+        77 => "雪粒",
+        80..=82 => "阵雨",
+        85 | 86 => "阵雪",
+        95 => "雷暴",
+        96 | 99 => "雷暴冰雹",
+        _ => "未知",
+    }
+}
+
+fn chrono_like_now() -> String {
+    let output = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", "Get-Date -Format 'HH:mm'"])
+        .output();
+    match output {
+        Ok(o) => String::from_utf8_lossy(&o.stdout).trim().to_string(),
+        Err(_) => String::new(),
+    }
+}
+
+
 /// Install a system tray icon with show / hide / quit actions. Until this
 /// lands the user had to kill `overlay.exe` from Task Manager to close the
 /// LingXi panel, which is unfriendly for a personal tool that lives in the
@@ -1448,9 +2063,31 @@ fn install_tray(app: &AppHandle) -> tauri::Result<()> {
     eprintln!("[lingxi] install_tray: creating menu...");
     let show_panel = MenuItem::with_id(app, "tray:show", "显示面板", true, None::<&str>)?;
     let hide_panel = MenuItem::with_id(app, "tray:hide", "隐藏面板", true, None::<&str>)?;
+
+    // Build widget submenu items dynamically from the builtin catalog.
+    let widget_items: Vec<_> = widgets::builtin_widgets()
+        .iter()
+        .map(|w| {
+            MenuItem::with_id(
+                app,
+                format!("widget:{}", w.id),
+                format!("{} {}", w.icon, w.label),
+                true,
+                None::<&str>,
+            )
+            .expect("failed to create widget menu item")
+        })
+        .collect();
+
+    let mut submenu_builder = SubmenuBuilder::new(app, "小工具");
+    for item in &widget_items {
+        submenu_builder = submenu_builder.item(item);
+    }
+    let widget_submenu = submenu_builder.build()?;
+
     let quit = MenuItem::with_id(app, "tray:quit", "退出灵犀", true, None::<&str>)?;
     let separator = PredefinedMenuItem::separator(app)?;
-    let menu = Menu::with_items(app, &[&show_panel, &hide_panel, &separator, &quit])?;
+    let menu = Menu::with_items(app, &[&show_panel, &hide_panel, &separator, &widget_submenu, &separator, &quit])?;
     eprintln!("[lingxi] install_tray: menu created, getting icon...");
     let icon = app
         .default_window_icon()
@@ -1475,6 +2112,12 @@ fn install_tray(app: &AppHandle) -> tauri::Result<()> {
             }
             "tray:quit" => {
                 app.exit(0);
+            }
+            id if id.starts_with("widget:") => {
+                let widget_id = &id[7..];
+                if let Some(manifest) = widgets::builtin_widgets().into_iter().find(|w| w.id == widget_id) {
+                    let _ = widgets::open_widget(app, &manifest);
+                }
             }
             _ => {}
         })
@@ -1521,7 +2164,23 @@ fn main() {
             agent_history,
             agent_reset,
             list_tools,
-            toggle_tool
+            toggle_tool,
+            // Widget commands
+            list_widgets,
+            open_widget,
+            close_widget,
+            list_open_widgets,
+            widget_capture_screen,
+            widget_ocr,
+            widget_pick_color,
+            widget_get_weather,
+            widget_calculate,
+            widget_translate,
+            widget_capture_and_translate,
+            widget_clipboard_history,
+            widget_clipboard_write,
+            widget_clipboard_clear,
+            widget_read_clipboard
         ])
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {
@@ -1533,12 +2192,30 @@ fn main() {
             }
             // Only local users need the GGUF. A persisted cloud configuration
             // must not trigger a needless ~400MB download at startup.
-            if app.state::<AppState>().backend.lock().unwrap().backend == "local" {
+            if app.state::<AppState>().backend.safe_lock().backend == "local" {
                 assistant_inference::prepare_in_background();
             }
             spawn_hotkey_worker(app.handle().clone());
+            spawn_widget_hotkey_worker(app.handle().clone());
             spawn_qq_foreground_sampler();
             install_tray(app.handle())?;
+            // Smoke-test mode: LINGXI_OPEN_ALL_WIDGETS=1 opens every widget
+            // window in sequence so they can be verified in bulk (check the
+            // stderr log for "page_load: Finished" per widget).
+            if std::env::var("LINGXI_OPEN_ALL_WIDGETS").is_ok() {
+                let handle = app.handle().clone();
+                thread::spawn(move || {
+                    thread::sleep(Duration::from_millis(1500));
+                    for w in widgets::builtin_widgets() {
+                        eprintln!("[lingxi] auto-open widget {} (verify mode)", w.id);
+                        if let Err(e) = widgets::open_widget(&handle, &w) {
+                            eprintln!("[lingxi] auto-open widget {} FAILED: {}", w.id, e);
+                        }
+                        thread::sleep(Duration::from_millis(500));
+                    }
+                    eprintln!("[lingxi] verify mode: all widgets opened");
+                });
+            }
             Ok(())
         })
         .run(tauri::generate_context!())

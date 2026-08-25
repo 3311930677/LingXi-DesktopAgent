@@ -513,7 +513,7 @@ pub fn is_ready() -> bool {
 pub fn prepare() -> Result<()> {
     let prepared = get_prepared()?;
     let device = Device::Cpu;
-    let mut model = MODEL.lock().expect("model mutex poisoned");
+    let mut model = MODEL.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     if model.is_none() {
         set_progress(2, 0, 0);
         *model = Some(build_model(&prepared.gguf_path, &device)?);
@@ -535,7 +535,7 @@ pub fn prepare_in_background() {
 }
 
 fn get_prepared() -> Result<Arc<Prepared>> {
-    let mut guard = PREPARED.lock().expect("prepared mutex poisoned");
+    let mut guard = PREPARED.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     if let Some(prepared) = guard.as_ref() {
         return Ok(prepared.clone());
     }
@@ -629,7 +629,9 @@ fn hf_download(repo: &str, file: &str) -> Result<PathBuf> {
         current += read as u64;
         PROGRESS_CURRENT.store(current, Ordering::Relaxed);
     }
-    out.flush().ok();
+    // Flush errors must surface: a failed flush can leave the `.part` file
+    // incomplete, and renaming it over `dest` would poison the model cache.
+    out.flush().context("flush model download")?;
     drop(out);
     std::fs::rename(&part, &dest).context("finalize download")?;
     Ok(dest)
@@ -662,7 +664,7 @@ fn run_task(task: &Task, input: &str) -> Result<String> {
     // it once on first use; every later call reuses the same weights instead of
     // re-reading the ~1.1GB GGUF from disk.
     let device = Device::Cpu;
-    let mut model_guard = MODEL.lock().expect("model mutex poisoned");
+    let mut model_guard = MODEL.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     if model_guard.is_none() {
         *model_guard = Some(build_model(&prepared.gguf_path, &device)?);
     }

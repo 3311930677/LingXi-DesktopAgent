@@ -25,7 +25,7 @@ pub use capability::FocusedProbe;
 pub use clipboard::{read_clipboard_text, write_clipboard_text};
 pub use foreground::{foreground_info, window_info, ForegroundInfo};
 pub use hotkey::{run_assistant_hotkey_loop, run_hotkey_loop, AssistantHotkey};
-pub use keyboard::{type_unicode, wait_for_trigger_release};
+pub use keyboard::{click_at, type_unicode, wait_for_trigger_release};
 pub use qq::{
     capture_qq_selection_text, qq_latest_message, qq_write_draft, remember_foreground_if_qq,
     resolve_qq_window, QqMessageSnapshot,

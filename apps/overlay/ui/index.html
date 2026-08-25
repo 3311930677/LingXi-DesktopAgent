@@ -101,8 +101,30 @@
       </section>
 
       <section class="tools-view" id="tools-view" hidden>
-        <div class="tools-header"><span>已注册工具</span><span class="tools-count" id="tools-count">0</span></div>
-        <div class="tools-list" id="tools-list"></div>
+        <div class="tools-toolbar">
+          <input class="tools-search" id="tools-search" type="search" placeholder="🔍 搜索工具..." />
+          <span class="tools-count" id="tools-count" hidden>0</span>
+          <button class="btn ghost tools-market-btn" id="tools-market-btn" disabled>插件市场</button>
+        </div>
+        <div class="widgets-section" id="widgets-section">
+          <div class="widgets-section-head">
+            <span class="widgets-section-title">🖥️ 桌面小工具</span>
+            <span class="widgets-section-sub">点击打开独立窗口</span>
+          </div>
+          <div class="widgets-grid" id="widgets-grid"></div>
+        </div>
+        <div class="tools-section-head">
+          <span>⚙️ Agent 工具</span>
+        </div>
+        <div class="tools-tabs" id="tools-tabs">
+          <button class="tools-tab is-active" data-cat="all">全部</button>
+          <button class="tools-tab" data-cat="capability">能力</button>
+          <button class="tools-tab" data-cat="adapter">应用</button>
+          <button class="tools-tab" data-cat="source">信息源</button>
+          <button class="tools-tab" data-cat="transform">变换</button>
+        </div>
+        <div class="tools-grid" id="tools-grid"></div>
+        <div class="tools-empty" id="tools-empty" hidden>没有找到匹配的工具</div>
       </section>
 
       <div class="status" id="status" hidden></div>

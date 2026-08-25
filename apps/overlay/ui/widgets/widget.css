@@ -1,0 +1,217 @@
+/* 灵犀小工具共享样式 — 所有 widget HTML 引用此文件保持视觉统一
+   设计原则：扁平、低饱和、留白克制，靠字重与层级而非颜色堆砌 */
+:root {
+  --bg: #1b1d21;
+  --surface: #232529;
+  --surface-hi: #2a2d33;
+  --stroke: #33363d;
+  --stroke-hi: #454a53;
+  --text: #e7e8ea;
+  --text-dim: #a6aab2;
+  --text-faint: #6b7078;
+  --brand: #8aadf4;
+  --brand-hi: #7498dd;
+  --brand-dim: rgba(138, 173, 244, 0.14);
+  --ok: #8fbf7f;
+  --warn: #dfb05e;
+  --err: #e0707e;
+  --radius: 8px;
+  --radius-sm: 6px;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font: 12.5px "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei", sans-serif;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* 统一标题栏：扁平、弱化，用左侧色条代替图标 */
+.widget-titlebar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--stroke);
+  user-select: none;
+  cursor: default;
+}
+.widget-titlebar .title {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--text-dim);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+/* 隐藏 HTML 中的 emoji 图标，改用色条点缀 */
+.widget-titlebar .title .icon { display: none; }
+.widget-titlebar .title::before {
+  content: "";
+  width: 3px;
+  height: 12px;
+  border-radius: 2px;
+  background: var(--brand);
+  opacity: 0.75;
+  flex: 0 0 auto;
+}
+.widget-close {
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-faint);
+  font: 14px/1 sans-serif;
+  cursor: pointer;
+  transition: background .12s, color .12s;
+}
+.widget-close:hover { background: rgba(224, 112, 126, 0.12); color: var(--err); }
+.widget-close:active { background: rgba(224, 112, 126, 0.2); }
+
+/* 主体内容区 */
+.widget-body {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  overflow: hidden;
+  min-height: 0;
+}
+
+/* 通用按钮：扁平描边风格 */
+.btn {
+  padding: 6px 14px;
+  border: 1px solid var(--stroke);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background .12s, border-color .12s, opacity .12s;
+}
+.btn:hover { background: var(--surface-hi); border-color: var(--stroke-hi); }
+.btn:active { opacity: .85; }
+.btn:disabled { opacity: .4; cursor: not-allowed; }
+.btn-primary {
+  background: var(--brand-dim);
+  border-color: rgba(138, 173, 244, 0.35);
+  color: var(--brand);
+}
+.btn-primary:hover {
+  background: rgba(138, 173, 244, 0.22);
+  border-color: var(--brand);
+}
+.btn-ghost { background: transparent; }
+.btn-sm { padding: 4px 10px; font-size: 11px; }
+
+/* 工具栏（横向按钮组） */
+.toolbar {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+/* 状态文字 */
+.status {
+  font-size: 11px;
+  color: var(--text-faint);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.status.err { color: var(--err); }
+.status.ok { color: var(--ok); }
+
+/* 加载转圈 */
+.spinner {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--stroke-hi);
+  border-top-color: var(--brand);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* 输入框：下沉式深色底 + 聚焦光环 */
+input[type="text"], input[type="search"], textarea, select {
+  width: 100%;
+  padding: 6px 10px;
+  background: #1e2024;
+  border: 1px solid var(--stroke);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font: inherit;
+  outline: 0;
+  transition: border-color .12s, box-shadow .12s;
+}
+input:focus, textarea:focus, select:focus {
+  border-color: var(--brand);
+  box-shadow: 0 0 0 2px rgba(138, 173, 244, 0.15);
+}
+textarea { resize: vertical; min-height: 40px; }
+select { cursor: pointer; }
+
+/* 结果/内容框 */
+.result-box {
+  background: var(--surface);
+  border: 1px solid var(--stroke);
+  border-radius: var(--radius-sm);
+  padding: 12px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  line-height: 1.65;
+  flex: 1 1 auto;
+  min-height: 40px;
+}
+.result-box::-webkit-scrollbar { width: 5px; }
+.result-box::-webkit-scrollbar-thumb { background: var(--stroke-hi); border-radius: 5px; }
+
+/* 空状态/占位 */
+.placeholder {
+  color: var(--text-faint);
+  text-align: center;
+  padding: 30px 16px;
+  font-size: 11.5px;
+  line-height: 1.9;
+  letter-spacing: 0.01em;
+}
+
+/* 卡片网格（用于历史/色板等） */
+.item-grid {
+  display: grid;
+  gap: 5px;
+  overflow-y: auto;
+  flex: 0 0 auto;
+  max-height: 100px;
+}
+.item-grid::-webkit-scrollbar { width: 5px; }
+.item-grid::-webkit-scrollbar-thumb { background: var(--stroke-hi); border-radius: 5px; }
+.item-row {
+  padding: 5px 10px;
+  background: var(--surface);
+  border: 1px solid transparent;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 11.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: border-color .12s;
+}
+.item-row:hover { border-color: var(--stroke-hi); }

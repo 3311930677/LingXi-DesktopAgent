@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>屏幕识别 · 灵犀</title>
+<link rel="stylesheet" href="widget.css">
+<style>
+.canvas-wrap {
+  flex: 1 1 auto;
+  background: var(--surface);
+  border: 1px solid var(--stroke);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 0;
+}
+canvas { max-width: 100%; max-height: 100%; cursor: crosshair; }
+.result-actions { display: flex; gap: 6px; flex: 0 0 auto; }
+.history-label { font-size: 11px; color: var(--text-faint); flex: 0 0 auto; }
+</style>
+</head>
+<body>
+<div class="widget-titlebar">
+  <div class="title"><span class="icon">🔍</span> 屏幕识别</div>
+  <button class="widget-close" id="widget-close" title="关闭 (Esc)">×</button>
+</div>
+<div class="widget-body">
+  <div class="toolbar">
+    <button class="btn btn-primary" id="capture-btn">截取屏幕</button>
+    <span class="status" id="status"></span>
+  </div>
+  <div class="canvas-wrap" id="canvas-wrap">
+    <div class="placeholder" id="placeholder">点击「截取屏幕」开始<br>截取后可在图片上拖拽框选区域识别文字</div>
+    <canvas id="canvas" style="display:none"></canvas>
+  </div>
+  <div class="result-box" id="result-text" style="display:none"></div>
+  <div class="result-actions" id="result-actions" style="display:none">
+    <button class="btn btn-sm" id="copy-btn">复制</button>
+    <button class="btn btn-sm" id="translate-btn">翻译</button>
+    <button class="btn btn-sm" id="search-btn">搜索</button>
+  </div>
+  <div class="history-label" id="history-label" style="display:none">最近识别：</div>
+  <div class="item-grid" id="history"></div>
+</div>
+<script src="widget.js"></script>
+<script>
+"use strict";
+let screenshot = null;
+let history = [];
+let isSelecting = false;
+let selStart = null;
+let selEnd = null;
+
+const el = {
+  captureBtn: document.getElementById("capture-btn"),
+  status: document.getElementById("status"),
+  canvasWrap: document.getElementById("canvas-wrap"),
+  placeholder: document.getElementById("placeholder"),
+  canvas: document.getElementById("canvas"),
+  resultText: document.getElementById("result-text"),
+  resultActions: document.getElementById("result-actions"),
+  copyBtn: document.getElementById("copy-btn"),
+  translateBtn: document.getElementById("translate-btn"),
+  searchBtn: document.getElementById("search-btn"),
+  history: document.getElementById("history"),
+  historyLabel: document.getElementById("history-label"),
+};
+
+async function captureScreen() {
+  if (!invoke) { setStatus("需要 Tauri 环境", "err"); return; }
+  el.captureBtn.disabled = true;
+  setStatus("正在截取屏幕...");
+  try {
+    const result = await invoke("widget_capture_screen");
+    const img = new Image();
+    img.onload = () => {
+      screenshot = img;
+      el.placeholder.style.display = "none";
+      el.canvas.style.display = "block";
+      const ctx = el.canvas.getContext("2d");
+      const maxW = el.canvasWrap.clientWidth - 20;
+      const maxH = el.canvasWrap.clientHeight - 20;
+      const scale = Math.min(maxW / img.width, maxH / img.height, 1);
+      el.canvas.width = img.width * scale;
+      el.canvas.height = img.height * scale;
+      ctx.drawImage(img, 0, 0, el.canvas.width, el.canvas.height);
+      setStatus("在图片上拖拽框选要识别的区域");
+      setupSelection();
+    };
+    img.src = result.image;
+  } catch(e) {
+    setStatus("截图失败: " + String(e), "err");
+  }
+  el.captureBtn.disabled = false;
+}
+
+function setupSelection() {
+  const ctx = el.canvas.getContext("2d");
+  el.canvas.onmousedown = (e) => {
+    isSelecting = true;
+    const rect = el.canvas.getBoundingClientRect();
+    selStart = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+  };
+  el.canvas.onmousemove = (e) => {
+    if (!isSelecting || !screenshot) return;
+    const rect = el.canvas.getBoundingClientRect();
+    selEnd = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+    ctx.drawImage(screenshot, 0, 0, el.canvas.width, el.canvas.height);
+    const x = Math.min(selStart.x, selEnd.x);
+    const y = Math.min(selStart.y, selEnd.y);
+    const w = Math.abs(selEnd.x - selStart.x);
+    const h = Math.abs(selEnd.y - selStart.y);
+    // 半透明遮罩
+    ctx.fillStyle = "rgba(0,0,0,.35)";
+    ctx.fillRect(0, 0, el.canvas.width, el.canvas.height);
+    // 清除选区显示原图
+    ctx.drawImage(screenshot, x / el.canvas.width * screenshot.width, y / el.canvas.height * screenshot.height, w / el.canvas.width * screenshot.width, h / el.canvas.height * screenshot.height, x, y, w, h);
+    // 选框边线
+    ctx.strokeStyle = "#7c8cff";
+    ctx.lineWidth = 2;
+    ctx.setLineDash([6, 4]);
+    ctx.strokeRect(x, y, w, h);
+    ctx.setLineDash([]);
+    // 尺寸标签
+    if (w > 30 && h > 20) {
+      const scaleX = screenshot.width / el.canvas.width;
+      const scaleY = screenshot.height / el.canvas.height;
+      const label = Math.round(w * scaleX) + "×" + Math.round(h * scaleY);
+      ctx.fillStyle = "rgba(124,140,255,.9)";
+      ctx.fillRect(x, y - 18, ctx.measureText(label).width + 20, 16);
+      ctx.fillStyle = "#fff";
+      ctx.font = "11px sans-serif";
+      ctx.fillText(label, x + 6, y - 6);
+    }
+  };
+  el.canvas.onmouseup = async (e) => {
+    if (!isSelecting || !screenshot || !selEnd) { isSelecting = false; return; }
+    isSelecting = false;
+    const rect = el.canvas.getBoundingClientRect();
+    selEnd = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+    const x = Math.min(selStart.x, selEnd.x);
+    const y = Math.min(selStart.y, selEnd.y);
+    const w = Math.abs(selEnd.x - selStart.x);
+    const h = Math.abs(selEnd.y - selStart.y);
+    if (w < 5 || h < 5) return;
+    const scaleX = screenshot.width / el.canvas.width;
+    const scaleY = screenshot.height / el.canvas.height;
+    await ocrRegion(Math.round(x * scaleX), Math.round(y * scaleY), Math.round(w * scaleX), Math.round(h * scaleY));
+  };
+}
+
+async function ocrRegion(x, y, w, h) {
+  setStatus("正在识别文字...");
+  el.resultText.style.display = "none";
+  el.resultActions.style.display = "none";
+  try {
+    const result = await invoke("widget_ocr", { x, y, w, h });
+    el.resultText.textContent = result.text || "(未识别到文字)";
+    el.resultText.style.display = "block";
+    el.resultActions.style.display = "flex";
+    setStatus("识别完成", "ok");
+    if (result.text) {
+      history.unshift(result.text.substring(0, 100));
+      history = history.slice(0, 5);
+      renderHistory();
+    }
+  } catch(e) {
+    setStatus("识别失败: " + String(e), "err");
+  }
+}
+
+function renderHistory() {
+  if (history.length === 0) {
+    el.history.innerHTML = "";
+    el.historyLabel.style.display = "none";
+    return;
+  }
+  el.historyLabel.style.display = "block";
+  el.history.innerHTML = "";
+  history.forEach((text, i) => {
+    const div = document.createElement("div");
+    div.className = "item-row";
+    div.textContent = text.substring(0, 60) + (text.length > 60 ? "..." : "");
+    div.onclick = () => {
+      el.resultText.textContent = history[i];
+      el.resultText.style.display = "block";
+      el.resultActions.style.display = "flex";
+    };
+    el.history.appendChild(div);
+  });
+}
+
+el.captureBtn.onclick = captureScreen;
+el.copyBtn.onclick = () => {
+  navigator.clipboard.writeText(el.resultText.textContent).then(() => setStatus("已复制到剪贴板", "ok"));
+};
+el.translateBtn.onclick = async () => {
+  const text = el.resultText.textContent;
+  if (!text) return;
+  setStatus("正在翻译...");
+  try {
+    const result = await invoke("widget_translate", { text, from: "auto", to: "zh" });
+    el.resultText.textContent = result.translated;
+    setStatus("已翻译", "ok");
+  } catch(e) { setStatus("翻译失败: " + String(e), "err"); }
+};
+el.searchBtn.onclick = () => {
+  const text = el.resultText.textContent.trim();
+  if (text) window.open("https://www.bing.com/search?q=" + encodeURIComponent(text));
+};
+
+setupWidgetClose("widget-ocr");
+</script>
+</body>
+</html>
