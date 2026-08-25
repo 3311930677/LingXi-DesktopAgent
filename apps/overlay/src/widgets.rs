@@ -138,8 +138,11 @@ pub fn open_widget(app: &AppHandle, manifest: &WidgetManifest) -> tauri::Result<
     match window {
         Ok(w) => {
             eprintln!("[lingxi] widget {} built OK", manifest.id);
-            #[cfg(debug_assertions)]
-            w.open_devtools();
+            // NOTE: do NOT call open_devtools() here — on Windows, opening
+            // DevTools on a freshly created WebView2 window minimizes the
+            // host window (observed: window parked at -16000,-16000 with
+            // showCmd=SW_SHOWMINIMIZED), which looked like a frozen white
+            // window. Debug the pages in a normal browser instead.
             Ok(())
         }
         Err(e) => {
