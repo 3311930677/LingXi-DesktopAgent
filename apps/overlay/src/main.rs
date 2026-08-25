@@ -1557,18 +1557,33 @@ fn list_widgets() -> Vec<widgets::WidgetManifest> {
     widgets::builtin_widgets()
 }
 
+/// Open a widget window. MUST NOT run on the main thread: while the main
+/// thread is inside an IPC dispatch or tray-menu callback it cannot pump
+/// messages, and `WebviewWindowBuilder::build()` needs the main thread to
+/// complete — calling it synchronously deadlocks the whole app (window
+/// never appears, tray quit stops working). The background-thread path
+/// (hotkey worker / verify mode) never deadlocks, so route every caller
+/// through a spawned thread.
 #[tauri::command]
-fn open_widget(app: AppHandle, id: String) -> Result<(), String> {
+async fn open_widget(app: AppHandle, id: String) -> Result<(), String> {
     let manifest = widgets::builtin_widgets()
         .into_iter()
         .find(|w| w.id == id)
         .ok_or_else(|| format!("未知小工具: {id}"))?;
-    widgets::open_widget(&app, &manifest).map_err(|e| e.to_string())
+    tauri::async_runtime::spawn_blocking(move || {
+        widgets::open_widget(&app, &manifest).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("打开小工具任务失败: {e}"))?
 }
 
 #[tauri::command]
-fn close_widget(app: AppHandle, id: String) -> Result<(), String> {
-    widgets::close_widget(&app, &id).map_err(|e| e.to_string())
+async fn close_widget(app: AppHandle, id: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        widgets::close_widget(&app, &id).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("关闭小工具任务失败: {e}"))?
 }
 
 /// Return the ids of widget windows currently open. Used by the tools grid to
@@ -2114,10 +2129,20 @@ fn install_tray(app: &AppHandle) -> tauri::Result<()> {
                 app.exit(0);
             }
             id if id.starts_with("widget:") => {
-                let widget_id = &id[7..];
-                if let Some(manifest) = widgets::builtin_widgets().into_iter().find(|w| w.id == widget_id) {
-                    let _ = widgets::open_widget(app, &manifest);
-                }
+                // Tray menu callbacks run on the main thread; building a
+                // WebView2 window from there deadlocks (see open_widget).
+                let widget_id = id[7..].to_string();
+                let app = app.clone();
+                std::thread::spawn(move || {
+                    if let Some(manifest) = widgets::builtin_widgets()
+                        .into_iter()
+                        .find(|w| w.id == widget_id)
+                    {
+                        if let Err(e) = widgets::open_widget(&app, &manifest) {
+                            eprintln!("[lingxi] open widget from tray: {e}");
+                        }
+                    }
+                });
             }
             _ => {}
         })
