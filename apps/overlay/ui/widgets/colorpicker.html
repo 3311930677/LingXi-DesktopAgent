@@ -150,13 +150,13 @@ function renderPalette() {
 el.pickBtn.onclick = async () => {
   if (!invoke) { setStatus("需要 Tauri 环境", "err"); return; }
   el.pickBtn.disabled = true;
-  setStatus("正在读取像素颜色...");
+  setStatus("取色中：移动鼠标到目标位置，左键点击确认，Esc 取消");
   try {
     const result = await invoke("widget_pick_color");
     updateColor(result.r, result.g, result.b);
-    setStatus("取色完成", "ok");
+    setStatus("取色完成 " + result.r + "," + result.g + "," + result.b, "ok");
   } catch(e) {
-    setStatus("取色失败: " + String(e), "err");
+    setStatus(String(e), "err");
   }
   el.pickBtn.disabled = false;
 };

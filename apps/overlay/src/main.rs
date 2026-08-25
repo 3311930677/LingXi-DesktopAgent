@@ -1,4 +1,4 @@
-//! LingXi overlay: a Tauri floating window over the capture/transform/write
+﻿//! LingXi overlay: a Tauri floating window over the capture/transform/write
 //! pipeline.
 //!
 //! Flow:
@@ -1680,21 +1680,61 @@ async fn widget_ocr(x: i32, y: i32, w: i32, h: i32) -> Result<serde_json::Value,
 
 /// Read the pixel color at the current cursor position.
 #[tauri::command]
-async fn widget_pick_color() -> Result<serde_json::Value, String> {
+async fn widget_pick_color(app: AppHandle) -> Result<serde_json::Value, String> {
     #[cfg(windows)]
     {
-        tauri::async_runtime::spawn_blocking(|| {
-            // GetCursorPos and POINT are already imported at the top of this file.
-            let mut point = POINT::default();
-            unsafe { GetCursorPos(&mut point).map_err(|e| format!("GetCursorPos: {e}"))? };
-            let (r, g, b) = lingxi_tools_windows::screen_capture::read_pixel(point.x, point.y)?;
-            Ok(serde_json::json!({ "r": r, "g": g, "b": b }))
+        use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_ESCAPE, VK_LBUTTON};
+
+        // Interactive picking: hide the picker window first, let the user move
+        // the mouse anywhere, and read the pixel where they left-click. The
+        // old version read the pixel at the cursor the instant the button was
+        // pressed — which was always the button's own color.
+        let window = app
+            .get_webview_window("widget-colorpicker")
+            .ok_or("取色器窗口未打开")?;
+        window.hide().map_err(|e| format!("隐藏窗口失败: {e}"))?;
+        std::thread::sleep(Duration::from_millis(120));
+
+        let result = tauri::async_runtime::spawn_blocking(move || {
+            // Wait for the left button that triggered this command to be
+            // released, so we don't instantly pick the button pixel.
+            for _ in 0..200 {
+                if unsafe { GetAsyncKeyState(VK_LBUTTON.0 as i32) } >= 0 {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(15));
+            }
+
+            let deadline = std::time::Instant::now() + Duration::from_secs(60);
+            loop {
+                if unsafe { GetAsyncKeyState(VK_ESCAPE.0 as i32) } < 0 {
+                    return Err("已取消取色".to_string());
+                }
+                if unsafe { GetAsyncKeyState(VK_LBUTTON.0 as i32) } < 0 {
+                    let mut point = POINT::default();
+                    unsafe { GetCursorPos(&mut point).map_err(|e| format!("GetCursorPos: {e}"))? };
+                    let (r, g, b) =
+                        lingxi_tools_windows::screen_capture::read_pixel(point.x, point.y)?;
+                    return Ok(serde_json::json!({
+                        "r": r, "g": g, "b": b, "x": point.x, "y": point.y,
+                    }));
+                }
+                if std::time::Instant::now() > deadline {
+                    return Err("取色超时（60秒未点击）".to_string());
+                }
+                std::thread::sleep(Duration::from_millis(15));
+            }
         })
         .await
-        .map_err(|e| format!("取色任务失败: {e}"))?
+        .map_err(|e| format!("取色任务失败: {e}"))?;
+
+        window.show().map_err(|e| format!("恢复窗口失败: {e}"))?;
+        let _ = window.set_focus();
+        result
     }
     #[cfg(not(windows))]
     {
+        let _ = app;
         Err("仅支持 Windows".to_string())
     }
 }

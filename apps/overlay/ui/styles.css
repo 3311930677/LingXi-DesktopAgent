@@ -218,6 +218,9 @@ body {
   gap: 7px;
   padding: 0 14px 12px;
 }
+/* Author-level `display: grid` overrides the UA's [hidden] rule, which is
+   why the rewrite-mode chips stayed visible on every page. */
+.modes[hidden] { display: none !important; }
 
 .chip {
   min-width: 0;

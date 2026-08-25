@@ -31,12 +31,6 @@
         </div>
       </header>
 
-      <nav class="modes" id="modes" aria-label="改写模式">
-        <button class="chip is-active" data-mode="polish" title="保留全部原意，按原文场景丰富并提升表达">润色</button>
-        <button class="chip" data-mode="proofread" title="只修正错别字、标点和语法">纠错</button>
-        <button class="chip featured" data-mode="prompt-enhance" title="补全角色、目标、约束、输出格式与示例">提示词增强</button>
-      </nav>
-
       <section class="tools-row">
         <button class="tool-tab is-active" id="rewrite-tab">改写</button>
         <button class="tool-tab" id="qq-tab">QQ 草稿</button>
@@ -45,6 +39,13 @@
         <button class="tool-tab" id="settings-btn">模型设置</button>
         <span class="backend-badge" id="backend-badge">本地</span>
       </section>
+
+      <!-- 改写模式：只属于「改写」视图，切换到其他页时由 JS 隐藏 -->
+      <nav class="modes" id="modes" aria-label="改写模式">
+        <button class="chip is-active" data-mode="polish" title="保留全部原意，按原文场景丰富并提升表达">润色</button>
+        <button class="chip" data-mode="proofread" title="只修正错别字、标点和语法">纠错</button>
+        <button class="chip featured" data-mode="prompt-enhance" title="补全角色、目标、约束、输出格式与示例">提示词增强</button>
+      </nav>
 
       <section class="diff-wrap" id="rewrite-view">
         <div class="diff-head">
