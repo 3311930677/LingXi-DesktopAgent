@@ -1,5 +1,5 @@
 :root {
-  font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+  font-family: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei", sans-serif;
 }
 * { box-sizing: border-box; }
 html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: transparent; user-select: none; }
@@ -9,12 +9,12 @@ body { display: grid; place-items: end center; padding: 8px; }
   width: 204px;
   height: 244px;
   padding: 0;
-  color: #eef1ff;
+  color: #ececf0;
   border: 0;
   outline: 0;
   background: transparent;
   cursor: grab;
-  filter: drop-shadow(0 12px 12px rgba(0, 0, 0, .32));
+  filter: drop-shadow(0 10px 10px rgba(0, 0, 0, .3));
   animation: float 3s ease-in-out infinite;
 }
 .pet:active { cursor: grabbing; }
@@ -31,6 +31,7 @@ body { display: grid; place-items: end center; padding: 8px; }
   pointer-events: none;
   transition: opacity .16s ease, transform .2s ease;
 }
+/* 状态环：仅 1px 细描边表达状态，不做发光。 */
 .halo {
   position: absolute;
   z-index: 1;
@@ -38,9 +39,8 @@ body { display: grid; place-items: end center; padding: 8px; }
   top: 42px;
   width: 164px;
   height: 164px;
-  border: 2px solid rgba(124, 140, 255, .5);
+  border: 1.5px solid rgba(255, 255, 255, .12);
   border-radius: 50%;
-  box-shadow: inset 0 0 22px rgba(87, 224, 200, .17), 0 0 22px rgba(124, 140, 255, .28);
   animation: halo 3s ease-in-out infinite;
 }
 .bubble {
@@ -52,24 +52,24 @@ body { display: grid; place-items: end center; padding: 8px; }
   max-width: 184px;
   padding: 5px 11px;
   overflow: hidden;
-  color: #e9edff;
+  color: #ececf0;
   font-size: 11px;
   white-space: nowrap;
   text-overflow: ellipsis;
-  background: rgba(20, 23, 39, .84);
-  border: 1px solid rgba(255, 255, 255, .15);
+  background: rgba(24, 24, 27, .92);
+  border: 1px solid rgba(255, 255, 255, .1);
   border-radius: 999px;
   transform: translateX(-50%);
   backdrop-filter: blur(10px);
 }
-.pet.thinking .halo { animation: spin 1.2s linear infinite; border-color: #f0c040; }
-.pet.thinking .bubble { color: #f0c040; }
+.pet.thinking .halo { animation: spin 1.6s linear infinite; border-style: dashed; border-color: rgba(224, 178, 104, .55); }
+.pet.thinking .bubble { color: #ecc98a; }
 .pet.speaking .avatar { animation: talk .48s ease-in-out infinite; }
 .pet.alert { animation: alert .65s ease-in-out 3; }
-.pet.alert .halo { border-color: rgba(111, 240, 182, .75); box-shadow: 0 0 26px rgba(111, 240, 182, .4); }
-.pet.alert .bubble { color: #6ff0b6; border-color: rgba(111, 240, 182, .5); }
+.pet.alert .halo { border-color: rgba(143, 191, 127, .6); }
+.pet.alert .bubble { color: #8fbf7f; border-color: rgba(143, 191, 127, .4); }
 @keyframes float { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-5px); } }
-@keyframes halo { 0%,100% { transform: scale(.95); opacity: .65; } 50% { transform: scale(1.05); opacity: 1; } }
+@keyframes halo { 0%,100% { transform: scale(.96); opacity: .55; } 50% { transform: scale(1.03); opacity: .9; } }
 @keyframes spin { to { transform: rotate(360deg); } }
 @keyframes talk { 50% { transform: translateY(-3px) scale(1.025); } }
 @keyframes alert { 25% { transform: translateX(-5px) rotate(-2deg); } 75% { transform: translateX(5px) rotate(2deg); } }
@@ -83,11 +83,11 @@ body { display: grid; place-items: end center; padding: 8px; }
   min-width: 150px;
   max-width: 196px;
   max-height: 190px;
-  padding: 7px;
+  padding: 6px;
   overflow-y: auto;
-  background: rgba(20, 23, 39, .92);
-  border: 1px solid rgba(255, 255, 255, .15);
-  border-radius: 12px;
+  background: rgba(24, 24, 27, .95);
+  border: 1px solid rgba(255, 255, 255, .1);
+  border-radius: 10px;
   box-shadow: 0 10px 28px rgba(0, 0, 0, .45);
   backdrop-filter: blur(12px);
 }
@@ -98,14 +98,14 @@ body { display: grid; place-items: end center; padding: 8px; }
   gap: 8px;
   min-width: 0;
   padding: 5px 8px;
-  color: #e9edff;
+  color: #ececf0;
   font-size: 12px;
   background: transparent;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--radius-sm, 6px);
   cursor: pointer;
 }
-.skin-item:hover { background: rgba(124, 140, 255, .18); }
-.skin-item.is-active { background: rgba(124, 140, 255, .28); }
+.skin-item:hover { background: rgba(255, 255, 255, .07); }
+.skin-item.is-active { background: rgba(224, 178, 104, .14); }
 .skin-item img { flex: 0 0 auto; width: 28px; height: 28px; object-fit: contain; }
 .skin-item span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

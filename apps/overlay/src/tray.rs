@@ -21,7 +21,7 @@ pub(crate) fn install_tray(app: &AppHandle) -> tauri::Result<()> {
             MenuItem::with_id(
                 app,
                 format!("widget:{}", w.id),
-                format!("{} {}", w.icon, w.label),
+                w.label.to_string(),
                 true,
                 None::<&str>,
             )

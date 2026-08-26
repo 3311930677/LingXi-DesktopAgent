@@ -8,15 +8,47 @@ document.documentElement.classList.toggle("tauri-runtime", Boolean(invoke));
 // Sample text used only for the in-browser preview (no Tauri backend).
 const MOCK_SOURCE = "圆圆的月亮真好看";
 
-// Tool icon mapping (emoji) for the tools-view card grid.
+// Linear stroke icons (24 viewBox) rendered via currentColor so they inherit
+// the panel's text color; replacing emoji keeps the tool grid monochrome.
+const icon = (d, size = 16) =>
+  `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${d}</svg>`;
+
 const TOOL_ICONS = {
-  read_file: "📄", write_file: "✏️", list_dir: "📂", search_files: "🔍",
-  run_command: "⚙️", read_clipboard: "📋", write_clipboard: "📋",
-  list_windows: "🪟", focus_window: "🎯", capture_screen: "📸",
-  open_app: "🚀", type_text: "⌨️", send_keys: "⌨️", click_at: "🖱️",
-  web_fetch: "🌐", web_search: "🔎", translate: "🌐", calculate: "🧮",
-  get_time: "🕐", set_reminder: "⏰", list_reminders: "⏰", cancel_reminder: "⏰",
-  qq_read_selection: "💬", qq_write_draft: "💬",
+  _default: icon('<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/>'),
+  read_file: icon('<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v5h5"/><path d="M16 13H8"/><path d="M16 17H8"/>'),
+  write_file: icon('<path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/>'),
+  list_dir: icon('<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>'),
+  search_files: icon('<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>'),
+  run_command: icon('<path d="m4 17 6-6-6-6"/><path d="M12 19h8"/>'),
+  read_clipboard: icon('<rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>'),
+  write_clipboard: icon('<rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>'),
+  list_windows: icon('<rect x="2" y="4" width="20" height="16" rx="2"/><path d="M2 8h20"/><path d="M6 4v4"/><path d="M10 4v4"/>'),
+  focus_window: icon('<circle cx="12" cy="12" r="10"/><path d="M22 12h-4"/><path d="M6 12H2"/><path d="M12 6V2"/><path d="M12 22v-4"/>'),
+  capture_screen: icon('<path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3Z"/><circle cx="12" cy="13" r="3"/>'),
+  open_app: icon('<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>'),
+  type_text: icon('<path d="M4 7V4h16v3"/><path d="M9 20h6"/><path d="M12 4v16"/>'),
+  send_keys: icon('<rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01"/><path d="M10 10h.01"/><path d="M14 10h.01"/><path d="M18 10h.01"/><path d="M8 14h8"/>'),
+  click_at: icon('<path d="m3 3 7.07 16.97 2.51-7.39 7.39-2.51L3 3Z"/>'),
+  web_fetch: icon('<circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/>'),
+  web_search: icon('<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>'),
+  translate: icon('<path d="m5 8 6 6"/><path d="m4 14 6-6 2-3"/><path d="M2 5h12"/><path d="M7 2h1"/><path d="m22 22-5-10-5 10"/><path d="M14 18h6"/>'),
+  calculate: icon('<rect x="4" y="2" width="16" height="20" rx="2"/><path d="M8 6h8"/><path d="M16 14v4"/><path d="M8 10h.01"/><path d="M12 10h.01"/><path d="M16 10h.01"/><path d="M8 14h.01"/><path d="M12 14h.01"/><path d="M8 18h.01"/><path d="M12 18h.01"/>'),
+  get_time: icon('<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>'),
+  set_reminder: icon('<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>'),
+  list_reminders: icon('<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>'),
+  cancel_reminder: icon('<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>'),
+  qq_read_selection: icon('<path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/>'),
+  qq_write_draft: icon('<path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/>'),
+};
+
+// Widget catalog icons keyed by widget id (cards no longer use the emoji field).
+const WIDGET_ICONS = {
+  "widget-ocr": icon('<path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><path d="M7 8h8"/><path d="M7 12h10"/><path d="M7 16h6"/>', 18),
+  "widget-translate": icon('<path d="m5 8 6 6"/><path d="m4 14 6-6 2-3"/><path d="M2 5h12"/><path d="M7 2h1"/><path d="m22 22-5-10-5 10"/><path d="M14 18h6"/>', 18),
+  "widget-colorpicker": icon('<path d="m2 22 1-1h3l9-9"/><path d="M3 21v-3l9-9"/><path d="m15 6 3.4-3.4a2.1 2.1 0 1 1 3 3L18 9l.4.4a2.1 2.1 0 1 1-3 3l-3.8-3.8a2.1 2.1 0 1 1 3-3l.4.4Z"/>', 18),
+  "widget-weather": icon('<path d="M12 2v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="M20 12h2"/><path d="m19.07 4.93-1.41 1.41"/><path d="M15.947 12.65a4 4 0 0 0-5.925-4.128"/><path d="M13 22H7a5 5 0 1 1 4.9-6H13a3 3 0 0 1 0 6Z"/>', 18),
+  "widget-calculator": icon('<rect x="4" y="2" width="16" height="20" rx="2"/><path d="M8 6h8"/><path d="M16 14v4"/><path d="M8 10h.01"/><path d="M12 10h.01"/><path d="M16 10h.01"/><path d="M8 14h.01"/><path d="M12 14h.01"/><path d="M8 18h.01"/><path d="M12 18h.01"/>', 18),
+  "widget-clipboard": icon('<rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>', 18),
 };
 
 // Tool category mapping for the filter tabs.
@@ -760,7 +792,7 @@ async function apply() {
   if (invoke) {
     try {
       await invoke("apply_transform", { mode: state.mode });
-      showStatus("已应用改写 ✓", "ok");
+      showStatus("已应用改写", "ok");
       // Clear the workspace quickly so another selection can be made without
       // the always-on-top panel covering the editor.
       setTimeout(close, 650);
@@ -768,7 +800,7 @@ async function apply() {
       showStatus("应用失败: " + e, "err");
     }
   } else {
-    showStatus("已应用改写 ✓ (预览模式)", "ok");
+    showStatus("已应用改写 (预览模式)", "ok");
   }
 }
 
@@ -776,13 +808,13 @@ async function undo() {
   if (invoke) {
     try {
       await invoke("undo_last");
-      showStatus("已撤销 ↩", "ok");
+      showStatus("已撤销", "ok");
       setTimeout(close, 650);
     } catch (e) {
       showStatus("撤销失败: " + e, "err");
     }
   } else {
-    showStatus("已撤销 ↩ (预览模式)", "ok");
+    showStatus("已撤销 (预览模式)", "ok");
   }
 }
 
@@ -917,13 +949,14 @@ async function resetAgentChat() {
 // ---- Tools management ----
 
 // Browser-preview widgets so the cards are visible without a Tauri backend.
+// Rendering resolves icons via WIDGET_ICONS[id]; no icon field needed here.
 const MOCK_WIDGETS = [
-  { id: "widget-ocr", label: "屏幕识别", icon: "🔍", shortcut: "Ctrl+Alt+O", description: "框选屏幕区域，OCR 提取文字" },
-  { id: "widget-translate", label: "全屏翻译", icon: "🌐", shortcut: "Ctrl+Alt+T", description: "框选区域识别并翻译" },
-  { id: "widget-colorpicker", label: "取色器", icon: "🎨", shortcut: "Ctrl+Alt+C", description: "屏幕取色，HEX/RGB/HSL" },
-  { id: "widget-weather", label: "天气", icon: "🌤️", shortcut: "", description: "当前天气与 3 日预报" },
-  { id: "widget-calculator", label: "计算器", icon: "🧮", shortcut: "Ctrl+Alt+=", description: "输入即算，支持单位换算" },
-  { id: "widget-clipboard", label: "剪贴板历史", icon: "📋", shortcut: "Ctrl+Alt+V", description: "最近剪贴板记录" },
+  { id: "widget-ocr", label: "屏幕识别", shortcut: "Ctrl+Alt+O", description: "框选屏幕区域，OCR 提取文字" },
+  { id: "widget-translate", label: "全屏翻译", shortcut: "Ctrl+Alt+T", description: "框选区域识别并翻译" },
+  { id: "widget-colorpicker", label: "取色器", shortcut: "Ctrl+Alt+C", description: "屏幕取色，HEX/RGB/HSL" },
+  { id: "widget-weather", label: "天气", shortcut: "", description: "当前天气与 3 日预报" },
+  { id: "widget-calculator", label: "计算器", shortcut: "Ctrl+Alt+=", description: "输入即算，支持单位换算" },
+  { id: "widget-clipboard", label: "剪贴板历史", shortcut: "Ctrl+Alt+V", description: "最近剪贴板记录" },
 ];
 
 let widgetsCache = [];
@@ -959,7 +992,7 @@ function renderWidgets(widgets) {
 
     const icon = document.createElement("span");
     icon.className = "widget-card-icon";
-    icon.textContent = w.icon;
+    icon.innerHTML = WIDGET_ICONS[w.id] || TOOL_ICONS._default;
 
     const body = document.createElement("div");
     body.className = "widget-card-body";
@@ -1051,7 +1084,7 @@ function applyToolsFilter() {
     head.className = "tool-card-head";
     const icon = document.createElement("span");
     icon.className = "tool-card-icon";
-    icon.textContent = TOOL_ICONS[t.name] || "🔧";
+    icon.innerHTML = TOOL_ICONS[t.name] || TOOL_ICONS._default;
     const name = document.createElement("span");
     name.className = "tool-card-name";
     name.textContent = t.name;

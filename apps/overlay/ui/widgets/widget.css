@@ -1,17 +1,17 @@
 /* 灵犀小工具共享样式 — 所有 widget HTML 引用此文件保持视觉统一
    设计原则：扁平、低饱和、留白克制，靠字重与层级而非颜色堆砌 */
 :root {
-  --bg: #1b1d21;
-  --surface: #232529;
-  --surface-hi: #2a2d33;
-  --stroke: #33363d;
-  --stroke-hi: #454a53;
-  --text: #e7e8ea;
-  --text-dim: #a6aab2;
-  --text-faint: #6b7078;
-  --brand: #8aadf4;
-  --brand-hi: #7498dd;
-  --brand-dim: rgba(138, 173, 244, 0.14);
+  --bg: #1a1a1d;
+  --surface: #212124;
+  --surface-hi: #28282c;
+  --stroke: #313135;
+  --stroke-hi: #42424a;
+  --text: #ececf0;
+  --text-dim: #a4a4ae;
+  --text-faint: #6e6e78;
+  --brand: #e0b268;
+  --brand-hi: #ecc98a;
+  --brand-dim: rgba(224, 178, 104, 0.12);
   --ok: #8fbf7f;
   --warn: #dfb05e;
   --err: #e0707e;
@@ -105,11 +105,11 @@ body {
 .btn:disabled { opacity: .4; cursor: not-allowed; }
 .btn-primary {
   background: var(--brand-dim);
-  border-color: rgba(138, 173, 244, 0.35);
-  color: var(--brand);
+  border-color: rgba(224, 178, 104, 0.35);
+  color: var(--brand-hi);
 }
 .btn-primary:hover {
-  background: rgba(138, 173, 244, 0.22);
+  background: rgba(224, 178, 104, 0.2);
   border-color: var(--brand);
 }
 .btn-ghost { background: transparent; }
@@ -161,7 +161,7 @@ input[type="text"], input[type="search"], textarea, select {
 }
 input:focus, textarea:focus, select:focus {
   border-color: var(--brand);
-  box-shadow: 0 0 0 2px rgba(138, 173, 244, 0.15);
+  box-shadow: 0 0 0 2px rgba(224, 178, 104, 0.14);
 }
 textarea { resize: vertical; min-height: 40px; }
 select { cursor: pointer; }

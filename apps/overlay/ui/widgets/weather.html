@@ -15,7 +15,7 @@
   flex: 0 0 auto;
 }
 .current .temp { font-size: 42px; font-weight: 200; line-height: 1.1; letter-spacing: 0.01em; }
-.current .icon { font-size: 32px; }
+.current .icon { color: var(--brand-hi); display: flex; justify-content: center; }
 .current .desc { color: var(--text-dim); margin-top: 5px; font-size: 12.5px; }
 .current .city { color: var(--text-faint); font-size: 11px; margin-top: 3px; letter-spacing: 0.03em; }
 .current .details { display: flex; justify-content: center; gap: 18px; margin-top: 12px; padding-top: 11px; border-top: 1px solid var(--stroke); font-size: 11.5px; color: var(--text-dim); }
@@ -28,21 +28,21 @@
   padding: 10px 6px 9px;
   text-align: center;
 }
-.forecast-day:first-child { border-color: rgba(138, 173, 244, 0.35); }
+.forecast-day:first-child { border-color: rgba(224, 178, 104, 0.35); }
 .forecast-day .day { font-size: 10.5px; color: var(--text-faint); letter-spacing: 0.04em; }
 .forecast-day:first-child .day { color: var(--brand); font-weight: 600; }
 .forecast-day .date { font-size: 9.5px; color: var(--text-faint); margin-top: 1px; opacity: .8; }
-.forecast-day .icon { font-size: 20px; margin: 5px 0 4px; }
+.forecast-day .icon { color: var(--text-dim); margin: 5px 0 4px; display: flex; justify-content: center; }
 .forecast-day .temps { font-size: 11.5px; font-variant-numeric: tabular-nums; }
-.forecast-day .high { color: #f0a8a8; }
-.forecast-day .low { color: #a8c8f0; }
+.forecast-day .high { color: #dbaa92; }
+.forecast-day .low { color: #9cb2cc; }
 .updated-at { text-align: center; font-size: 10px; color: var(--text-faint); flex: 0 0 auto; opacity: .85; }
 #content { flex: 1 1 auto; display: flex; flex-direction: column; gap: 10px; min-height: 0; }
 </style>
 </head>
 <body>
 <div class="widget-titlebar">
-  <div class="title"><span class="icon">🌤️</span> 天气</div>
+  <div class="title">天气</div>
   <button class="widget-close" id="widget-close" title="关闭 (Esc)">×</button>
 </div>
 <div class="widget-body">
@@ -53,7 +53,7 @@
   <div class="placeholder" id="loading"><span class="spinner"></span> 正在获取天气...</div>
   <div id="content" style="display:none">
     <div class="current">
-      <div class="icon" id="w-icon">🌤️</div>
+      <div class="icon" id="w-icon"></div>
       <div class="temp" id="w-temp">--°</div>
       <div class="desc" id="w-desc">--</div>
       <div class="city" id="w-city"></div>
@@ -83,13 +83,33 @@ const el = {
   forecast: document.getElementById("forecast"),
 };
 
+// 线性描边天气图标（与主面板图标系统同风格），currentColor 继承容器颜色。
+const wIcon = (d, size = 30) =>
+  '<svg viewBox="0 0 24 24" width="' + size + '" height="' + size + '" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + d + "</svg>";
+
+const PATHS = {
+  sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/>',
+  cloudSun: '<path d="M12 2v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="M20 12h2"/><path d="m19.07 4.93-1.41 1.41"/><path d="M15.947 12.65a4 4 0 0 0-5.925-4.128"/><path d="M13 22H7a5 5 0 1 1 4.9-6H13a3 3 0 0 1 0 6Z"/>',
+  cloud: '<path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/>',
+  fog: '<path d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242"/><path d="M16 17H7"/><path d="M17 21H9"/>',
+  drizzle: '<path d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242"/><path d="M8 19v1"/><path d="M8 14v1"/><path d="M16 19v1"/><path d="M16 14v1"/><path d="M12 21v1"/><path d="M12 16v1"/>',
+  rain: '<path d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242"/><path d="M16 14v6"/><path d="M8 14v6"/><path d="M12 16v6"/>',
+  snow: '<path d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242"/><path d="M8 15h.01"/><path d="M8 19h.01"/><path d="M12 17h.01"/><path d="M12 21h.01"/><path d="M16 15h.01"/><path d="M16 19h.01"/>',
+  storm: '<path d="M6 16.326A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 .5 8.973"/><path d="m13 12-3 5h4l-3 5"/>',
+  therm: '<path d="M14 4v10.54a4 4 0 1 1-4 0V4a2 2 0 0 1 4 0Z"/>',
+};
+
 const WEATHER_ICONS = {
-  0: "☀️", 1: "🌤️", 2: "⛅", 3: "☁️", 45: "🌫️", 48: "🌫️",
-  51: "🌦️", 53: "🌦️", 55: "🌧️", 56: "🌧️", 57: "🌧️",
-  61: "🌧️", 63: "🌧️", 65: "🌧️", 66: "🌧️", 67: "🌧️",
-  71: "❄️", 73: "❄️", 75: "❄️", 77: "❄️",
-  80: "🌦️", 81: "🌧️", 82: "🌧️", 85: "🌨️", 86: "🌨️",
-  95: "⛈️", 96: "⛈️", 99: "⛈️",
+  0: PATHS.sun, 1: PATHS.sun, 2: PATHS.cloudSun, 3: PATHS.cloud,
+  45: PATHS.fog, 48: PATHS.fog,
+  51: PATHS.drizzle, 53: PATHS.drizzle, 55: PATHS.drizzle,
+  56: PATHS.drizzle, 57: PATHS.drizzle,
+  61: PATHS.rain, 63: PATHS.rain, 65: PATHS.rain,
+  66: PATHS.rain, 67: PATHS.rain,
+  71: PATHS.snow, 73: PATHS.snow, 75: PATHS.snow, 77: PATHS.snow,
+  80: PATHS.rain, 81: PATHS.rain, 82: PATHS.rain,
+  85: PATHS.snow, 86: PATHS.snow,
+  95: PATHS.storm, 96: PATHS.storm, 99: PATHS.storm,
 };
 
 const WEEKDAYS = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
@@ -116,7 +136,7 @@ async function loadWeather() {
   try {
     const data = await invoke("widget_get_weather", { city: city || null });
     const cur = data.current;
-    el.wIcon.textContent = WEATHER_ICONS[cur.weather_code] || "🌡️";
+    el.wIcon.innerHTML = wIcon(WEATHER_ICONS[cur.weather_code] || PATHS.therm, 34);
     el.wTemp.innerHTML = Math.round(cur.temperature) + '<span style="font-size:20px;color:var(--text-dim)">°C</span>';
     el.wDesc.textContent = cur.description;
     el.wCity.textContent = data.city && data.city !== "未知" ? data.city : "";
@@ -131,7 +151,7 @@ async function loadWeather() {
       const info = describeDate(d.date, i);
       day.innerHTML = '<div class="day">' + info.label + '</div>'
         + '<div class="date">' + info.dateText + '</div>'
-        + '<div class="icon">' + (WEATHER_ICONS[d.weather_code] || "🌡️") + '</div>'
+        + '<div class="icon">' + wIcon(WEATHER_ICONS[d.weather_code] || PATHS.therm, 22) + '</div>'
         + '<div class="temps"><span class="high">' + Math.round(d.max) + '°</span><span class="sep" style="opacity:.4"> / </span><span class="low">' + Math.round(d.min) + '°</span></div>';
       el.forecast.appendChild(day);
     });
