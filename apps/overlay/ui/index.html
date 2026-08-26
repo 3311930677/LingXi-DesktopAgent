@@ -36,7 +36,7 @@
         <button class="tool-tab" id="qq-tab">QQ 草稿</button>
         <button class="tool-tab" id="agent-tab">对话</button>
         <button class="tool-tab" id="tools-tab">工具</button>
-        <button class="tool-tab" id="settings-btn">模型设置</button>
+        <button class="tool-tab" id="settings-btn">设置</button>
         <span class="backend-badge" id="backend-badge">本地</span>
       </section>
 
@@ -76,6 +76,7 @@
       </section>
 
       <section class="settings-panel" id="settings-panel" hidden>
+        <div class="settings-divider"><span>模型服务</span></div>
         <label>服务商预设<select id="provider-preset"><option value="">自定义 / 不改动</option><option value="deepseek">DeepSeek（deepseek-chat）</option><option value="dashscope">通义千问（qwen-plus）</option><option value="openai">OpenAI（gpt-4o-mini）</option></select></label>
         <label>模型后端<select id="backend-select"><option value="local">本地 Qwen2.5 1.5B（离线/隐私）</option><option value="cloud">OpenAI 兼容云端（最高质量）</option></select></label>
         <label>Endpoint<input id="endpoint-input" type="url" placeholder="https://api.openai.com" /></label>
@@ -85,6 +86,19 @@
         <p class="settings-note" id="key-note">密钥默认只保留在内存；勾选后由当前 Windows 账户加密保存，不会写入明文配置。</p>
         <p class="settings-note">本地 1.5B 适合短文本和隐私场景；80 字以上或追求高质量时，建议使用云端强模型。</p>
         <button class="btn primary" id="save-settings">保存设置</button>
+
+        <div class="settings-divider"><span>桌宠形象</span></div>
+        <div class="skin-grid" id="skin-grid" aria-label="桌宠皮肤"></div>
+        <p class="settings-note">点击卡片立即切换皮肤；把新皮肤文件夹放到 assets/skins/ 下即可被识别。桌宠窗口右键也能快捷切换。</p>
+        <label>气泡文案（留空使用皮肤默认）</label>
+        <div class="bubble-grid">
+          <label>待机<input id="bubble-idle" type="text" maxlength="16" placeholder="灵犀" /></label>
+          <label>思考<input id="bubble-thinking" type="text" maxlength="16" placeholder="思考中…" /></label>
+          <label>发言<input id="bubble-speaking" type="text" maxlength="16" placeholder="建议好了" /></label>
+          <label>提醒<input id="bubble-alert" type="text" maxlength="16" placeholder="QQ 新消息" /></label>
+        </div>
+        <label class="remember-key"><input id="pet-visible" type="checkbox" checked /> 在桌面显示桌宠</label>
+        <button class="btn ghost" id="save-pet-options">保存桌宠设置</button>
       </section>
 
       <section class="agent-view" id="agent-view" hidden>

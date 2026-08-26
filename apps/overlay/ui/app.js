@@ -110,6 +110,14 @@ const el = {
   rememberApiKey: document.getElementById("remember-api-key"),
   keyNote: document.getElementById("key-note"),
   saveSettings: document.getElementById("save-settings"),
+  // Pet skin settings
+  skinGrid: document.getElementById("skin-grid"),
+  bubbleIdle: document.getElementById("bubble-idle"),
+  bubbleThinking: document.getElementById("bubble-thinking"),
+  bubbleSpeaking: document.getElementById("bubble-speaking"),
+  bubbleAlert: document.getElementById("bubble-alert"),
+  petVisible: document.getElementById("pet-visible"),
+  savePetOptions: document.getElementById("save-pet-options"),
   resizeGrip: document.getElementById("resize-grip"),
   taskProgress: document.getElementById("task-progress"),
   progressStage: document.getElementById("progress-stage"),
@@ -571,6 +579,80 @@ async function saveSettings() {
   }
 }
 
+// ---- Pet skin settings ----
+
+let petSkinsCache = [];
+
+function renderSkinGrid(skins, activeId) {
+  el.skinGrid.replaceChildren();
+  for (const skin of skins) {
+    const card = document.createElement("button");
+    card.type = "button";
+    card.className = "skin-card" + (skin.id === activeId ? " is-active" : "");
+    card.title = skin.description || skin.name;
+    const thumb = document.createElement("img");
+    thumb.src = skin.thumbnail;
+    thumb.alt = skin.name;
+    thumb.draggable = false;
+    const name = document.createElement("span");
+    name.textContent = skin.name;
+    const meta = document.createElement("small");
+    meta.textContent = [skin.author, skin.version].filter(Boolean).join(" · ");
+    card.append(thumb, name, meta);
+    card.addEventListener("click", async () => {
+      if (skin.id === activeId) return;
+      try {
+        // 切换即时生效（后端会广播 pet-config-changed，桌宠窗口热换）。
+        const view = await invoke("set_pet_skin", { skinId: skin.id });
+        renderSkinGrid(petSkinsCache, view.skin.id);
+        showStatus("已切换为「" + skin.name + "」", "ok");
+      } catch (e) {
+        showStatus("切换皮肤失败: " + e, "err");
+      }
+    });
+    el.skinGrid.appendChild(card);
+  }
+}
+
+function fillPetSettings(view) {
+  renderSkinGrid(petSkinsCache, view.skin.id);
+  el.bubbleIdle.value = (view.overrides && view.overrides.idle) || "";
+  el.bubbleThinking.value = (view.overrides && view.overrides.thinking) || "";
+  el.bubbleSpeaking.value = (view.overrides && view.overrides.speaking) || "";
+  el.bubbleAlert.value = (view.overrides && view.overrides.alert) || "";
+  el.petVisible.checked = Boolean(view.visible);
+}
+
+async function loadPetSettings() {
+  if (!invoke) return;
+  try {
+    const [skins, view] = await Promise.all([
+      invoke("list_pet_skins"),
+      invoke("current_pet_config"),
+    ]);
+    petSkinsCache = skins;
+    fillPetSettings(view);
+  } catch (e) {
+    showStatus("读取桌宠设置失败: " + e, "err");
+  }
+}
+
+async function savePetOptions() {
+  if (!invoke) return;
+  try {
+    const overrides = {
+      idle: el.bubbleIdle.value,
+      thinking: el.bubbleThinking.value,
+      speaking: el.bubbleSpeaking.value,
+      alert: el.bubbleAlert.value,
+    };
+    await invoke("set_pet_options", { overrides, visible: el.petVisible.checked });
+    showStatus("桌宠设置已保存", "ok");
+  } catch (e) {
+    showStatus("保存桌宠设置失败: " + e, "err");
+  }
+}
+
 async function readQqMessage() {
   if (!invoke) return;
   // First check QQ is foreground so we can show a friendly error instead of
@@ -1017,9 +1099,18 @@ el.toolsGrid.addEventListener("click", async (e) => {
   const cached = toolsCache.find((t) => t.name === name);
   if (cached) cached.enabled = newEnabled;
 });
-el.settingsBtn.addEventListener("click", () => { showView("settings"); loadSettings(); });
+el.settingsBtn.addEventListener("click", () => { showView("settings"); loadSettings(); loadPetSettings(); });
 el.providerPreset.addEventListener("change", applyProviderPreset);
 el.saveSettings.addEventListener("click", saveSettings);
+el.savePetOptions.addEventListener("click", savePetOptions);
+// 皮肤也可能从桌宠右键菜单切换：设置页打开期间同步高亮状态。
+if (TAURI && TAURI.event && TAURI.event.listen) {
+  TAURI.event.listen("pet-config-changed", (event) => {
+    if (event.payload && event.payload.skin && petSkinsCache.length) {
+      renderSkinGrid(petSkinsCache, event.payload.skin.id);
+    }
+  }).catch(() => {});
+}
 el.qqRefresh.addEventListener("click", readQqMessage);
 el.qqGenerate.addEventListener("click", generateQqDraft);
 el.qqWrite.addEventListener("click", writeQqDraft);

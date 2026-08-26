@@ -73,3 +73,39 @@ body { display: grid; place-items: end center; padding: 8px; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @keyframes talk { 50% { transform: translateY(-3px) scale(1.025); } }
 @keyframes alert { 25% { transform: translateX(-5px) rotate(-2deg); } 75% { transform: translateX(5px) rotate(2deg); } }
+
+.skin-menu {
+  position: fixed;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 150px;
+  max-width: 196px;
+  max-height: 190px;
+  padding: 7px;
+  overflow-y: auto;
+  background: rgba(20, 23, 39, .92);
+  border: 1px solid rgba(255, 255, 255, .15);
+  border-radius: 12px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, .45);
+  backdrop-filter: blur(12px);
+}
+.skin-menu[hidden] { display: none; }
+.skin-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 5px 8px;
+  color: #e9edff;
+  font-size: 12px;
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.skin-item:hover { background: rgba(124, 140, 255, .18); }
+.skin-item.is-active { background: rgba(124, 140, 255, .28); }
+.skin-item img { flex: 0 0 auto; width: 28px; height: 28px; object-fit: contain; }
+.skin-item span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

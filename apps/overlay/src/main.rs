@@ -17,6 +17,7 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod pet_skin;
 mod secret_store;
 mod widgets;
 
@@ -41,7 +42,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem, SubmenuBuilder},
     tray::TrayIconBuilder,
-    AppHandle, Manager, PhysicalPosition, PhysicalSize, State, WebviewWindow,
+    AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, State, WebviewWindow,
 };
 use windows::Win32::Foundation::{HWND, POINT};
 use windows::Win32::Graphics::Gdi::{
@@ -85,6 +86,8 @@ struct CachedPreview {
 
 /// Runtime model settings. The API key is session-only by design: endpoint,
 /// model and backend choice are persisted, but plaintext credentials are not.
+/// 桌宠相关字段（pet_skin/pet_bubble_overrides/pet_visible）同存此文件：
+/// 复用同一份落盘通道，避免多配置文件与读写竞争。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 struct BackendSettings {
@@ -95,6 +98,12 @@ struct BackendSettings {
     api_key: String,
     /// Whether the key is persisted using Windows DPAPI for this user.
     remember_api_key: bool,
+    /// 当前桌宠皮肤 id（见 ui/assets/skins/）。
+    pet_skin: String,
+    /// 用户自定义气泡文案（None = 使用皮肤默认文案）。
+    pet_bubble_overrides: pet_skin::PetBubbleOverrides,
+    /// 桌宠窗口是否显示。
+    pet_visible: bool,
 }
 
 impl Default for BackendSettings {
@@ -105,6 +114,9 @@ impl Default for BackendSettings {
             model: "gpt-4o-mini".into(),
             api_key: std::env::var("LINGXI_OPENAI_API_KEY").unwrap_or_default(),
             remember_api_key: false,
+            pet_skin: pet_skin::DEFAULT_SKIN_ID.to_string(),
+            pet_bubble_overrides: Default::default(),
+            pet_visible: true,
         }
     }
 }
@@ -417,6 +429,89 @@ fn set_pet_status(state: State<AppState>, status: String) -> Result<(), String> 
     }
     *state.pet_status.safe_lock() = status;
     Ok(())
+}
+
+/// 设置页：列出全部可用皮肤。
+#[tauri::command]
+fn list_pet_skins() -> Vec<pet_skin::PetSkinInfo> {
+    pet_skin::list_skins()
+}
+
+/// 桌宠窗口启动时拉取当前配置（皮肤 + 气泡覆盖 + 可见性）。
+#[tauri::command]
+fn current_pet_config(state: State<AppState>) -> Result<pet_skin::PetSkinView, String> {
+    let settings = state.backend.safe_lock();
+    pet_skin::view_for(
+        &settings.pet_skin,
+        &settings.pet_bubble_overrides,
+        settings.pet_visible,
+    )
+}
+
+/// 切换皮肤：校验 → 落盘 → 广播 `pet-config-changed`（桌宠窗口即时热换）。
+#[tauri::command]
+fn set_pet_skin(
+    app: AppHandle,
+    state: State<AppState>,
+    skin_id: String,
+) -> Result<pet_skin::PetSkinView, String> {
+    if !pet_skin::valid_skin_id(&skin_id) {
+        return Err("皮肤 id 非法".into());
+    }
+    let view = {
+        let mut settings = state.backend.safe_lock();
+        // 先校验皮肤可用，失败不落盘；切换不改变可见性设置。
+        pet_skin::load_manifest(&skin_id)?;
+        let visible = settings.pet_visible;
+        let overrides = settings.pet_bubble_overrides.clone();
+        settings.pet_skin = skin_id.clone();
+        persist_backend_settings(&settings)?;
+        drop(settings);
+        pet_skin::view_for(&skin_id, &overrides, visible)?
+    };
+    app.emit("pet-config-changed", &view).map_err(|e| e.to_string())?;
+    Ok(view)
+}
+
+/// 桌宠杂项设置：气泡文案覆盖 + 可见性开关。
+#[tauri::command]
+fn set_pet_options(
+    app: AppHandle,
+    state: State<AppState>,
+    overrides: pet_skin::PetBubbleOverrides,
+    visible: bool,
+) -> Result<pet_skin::PetSkinView, String> {
+    let view = {
+        let mut settings = state.backend.safe_lock();
+        // 覆盖文案裁剪：空串视为"用皮肤默认"。
+        let trimmed = |text: &Option<String>| {
+            text.as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+        };
+        settings.pet_bubble_overrides = pet_skin::PetBubbleOverrides {
+            idle: trimmed(&overrides.idle),
+            thinking: trimmed(&overrides.thinking),
+            speaking: trimmed(&overrides.speaking),
+            alert: trimmed(&overrides.alert),
+        };
+        settings.pet_visible = visible;
+        persist_backend_settings(&settings)?;
+        let skin_id = settings.pet_skin.clone();
+        let overrides = settings.pet_bubble_overrides.clone();
+        drop(settings);
+        pet_skin::view_for(&skin_id, &overrides, visible)?
+    };
+    if visible {
+        if let Some(pet) = app.get_webview_window("pet") {
+            let _ = pet.show();
+        }
+    } else if let Some(pet) = app.get_webview_window("pet") {
+        let _ = pet.hide();
+    }
+    app.emit("pet-config-changed", &view).map_err(|e| e.to_string())?;
+    Ok(view)
 }
 
 #[tauri::command]
@@ -2322,6 +2417,10 @@ fn main() {
             model_progress,
             pet_status,
             set_pet_status,
+            list_pet_skins,
+            current_pet_config,
+            set_pet_skin,
+            set_pet_options,
             toggle_panel,
             set_panel_focusable,
             qq_poll_latest,
@@ -2359,6 +2458,10 @@ fn main() {
             if let Some(window) = app.get_webview_window("pet") {
                 make_non_activating(&window).map_err(std::io::Error::other)?;
                 position_pet(&window);
+                // 上次会话隐藏了桌宠：启动时保持隐藏。
+                if !app.state::<AppState>().backend.safe_lock().pet_visible {
+                    let _ = window.hide();
+                }
             }
             // Only local users need the GGUF. A persisted cloud configuration
             // must not trigger a needless ~400MB download at startup.

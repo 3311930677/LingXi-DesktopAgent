@@ -7,17 +7,18 @@
     <link rel="stylesheet" href="pet.css" />
   </head>
   <body>
-    <button class="pet idle" id="pet" aria-label="打开灵犀面板" title="单击打开灵犀，拖动可移动">
+    <button class="pet idle" id="pet" aria-label="打开灵犀面板" title="单击打开灵犀，拖动可移动，右键换皮肤">
       <span class="halo"></span>
       <img
         class="avatar"
         id="pet-avatar"
-        src="assets/lingxi-hamster/idle.png"
+        src="assets/skins/lingxi-hamster/idle.png"
         alt="灵犀仓鼠"
         draggable="false"
       />
       <span class="bubble" id="bubble">灵犀</span>
     </button>
+    <div class="skin-menu" id="skin-menu" hidden></div>
     <script src="pet.js"></script>
   </body>
 </html>
