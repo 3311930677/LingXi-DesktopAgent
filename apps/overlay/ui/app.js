@@ -118,6 +118,10 @@ const el = {
   bubbleAlert: document.getElementById("bubble-alert"),
   petVisible: document.getElementById("pet-visible"),
   savePetOptions: document.getElementById("save-pet-options"),
+  // Window behavior settings
+  panelAutoHide: document.getElementById("panel-auto-hide"),
+  panelRememberPos: document.getElementById("panel-remember-pos"),
+  saveWindowOptions: document.getElementById("save-window-options"),
   resizeGrip: document.getElementById("resize-grip"),
   taskProgress: document.getElementById("task-progress"),
   progressStage: document.getElementById("progress-stage"),
@@ -653,6 +657,32 @@ async function savePetOptions() {
   }
 }
 
+// ---- Window behavior settings ----
+
+async function loadWindowOptions() {
+  if (!invoke) return;
+  try {
+    const options = await invoke("get_window_options");
+    el.panelAutoHide.checked = Boolean(options.panel_auto_hide);
+    el.panelRememberPos.checked = Boolean(options.panel_remember_position);
+  } catch (e) {
+    showStatus("读取窗口设置失败: " + e, "err");
+  }
+}
+
+async function saveWindowOptions() {
+  if (!invoke) return;
+  try {
+    await invoke("set_window_options", {
+      panelAutoHide: el.panelAutoHide.checked,
+      panelRememberPos: el.panelRememberPos.checked,
+    });
+    showStatus("窗口设置已保存", "ok");
+  } catch (e) {
+    showStatus("保存窗口设置失败: " + e, "err");
+  }
+}
+
 async function readQqMessage() {
   if (!invoke) return;
   // First check QQ is foreground so we can show a friendly error instead of
@@ -1099,10 +1129,11 @@ el.toolsGrid.addEventListener("click", async (e) => {
   const cached = toolsCache.find((t) => t.name === name);
   if (cached) cached.enabled = newEnabled;
 });
-el.settingsBtn.addEventListener("click", () => { showView("settings"); loadSettings(); loadPetSettings(); });
+el.settingsBtn.addEventListener("click", () => { showView("settings"); loadSettings(); loadPetSettings(); loadWindowOptions(); });
 el.providerPreset.addEventListener("change", applyProviderPreset);
 el.saveSettings.addEventListener("click", saveSettings);
 el.savePetOptions.addEventListener("click", savePetOptions);
+el.saveWindowOptions.addEventListener("click", saveWindowOptions);
 // 皮肤也可能从桌宠右键菜单切换：设置页打开期间同步高亮状态。
 if (TAURI && TAURI.event && TAURI.event.listen) {
   TAURI.event.listen("pet-config-changed", (event) => {

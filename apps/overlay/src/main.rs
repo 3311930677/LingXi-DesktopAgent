@@ -20,6 +20,7 @@
 mod pet_skin;
 mod secret_store;
 mod widgets;
+mod window_state;
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
@@ -42,19 +43,21 @@ use serde::{Deserialize, Serialize};
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem, SubmenuBuilder},
     tray::TrayIconBuilder,
-    AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, State, WebviewWindow,
+    AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, State, WebviewWindow, WindowEvent,
 };
 use windows::Win32::Foundation::{HWND, POINT};
 use windows::Win32::Graphics::Gdi::{
     GetMonitorInfoW, MonitorFromPoint, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+    MONITOR_DEFAULTTONULL,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     RegisterHotKey, ReleaseCapture, UnregisterHotKey, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, VK_O,
     VK_T, VK_C, VK_V, VK_OEM_PLUS,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetCursorPos, GetMessageW, GetWindowLongPtrW, SendMessageW, SetWindowLongPtrW, GWL_EXSTYLE,
-    HTBOTTOMRIGHT, MSG, WM_HOTKEY, WM_NCLBUTTONDOWN, WS_EX_NOACTIVATE,
+    GetCursorPos, GetForegroundWindow, GetMessageW, GetWindowLongPtrW, GetWindowThreadProcessId,
+    SendMessageW, SetWindowLongPtrW, GWL_EXSTYLE, HTBOTTOMRIGHT, MSG, WM_HOTKEY, WM_NCLBUTTONDOWN,
+    WS_EX_NOACTIVATE,
 };
 
 /// Extension trait so every `Mutex::lock().unwrap()` in the app recovers from
@@ -104,6 +107,10 @@ struct BackendSettings {
     pet_bubble_overrides: pet_skin::PetBubbleOverrides,
     /// 桌宠窗口是否显示。
     pet_visible: bool,
+    /// 面板失焦（用户切到别的应用）后自动收起。
+    panel_auto_hide: bool,
+    /// 记住面板拖动位置；关闭则每次出现在光标附近。
+    panel_remember_position: bool,
 }
 
 impl Default for BackendSettings {
@@ -117,6 +124,8 @@ impl Default for BackendSettings {
             pet_skin: pet_skin::DEFAULT_SKIN_ID.to_string(),
             pet_bubble_overrides: Default::default(),
             pet_visible: true,
+            panel_auto_hide: true,
+            panel_remember_position: true,
         }
     }
 }
@@ -161,6 +170,13 @@ struct AppState {
     /// Once the user drags the panel, preserve that preferred position instead
     /// of snapping it back beside the cursor on every invocation.
     user_positioned: AtomicBool,
+    /// 窗口位置持久化数据（panel/pet），启动时从磁盘加载。
+    window_state: Mutex<window_state::WindowState>,
+    /// 防抖写盘调度标志：拖动期间高频 Moved 事件只触发一次落盘任务。
+    window_save_pending: AtomicBool,
+    /// 程序化 set_position 的目标位置：与 Moved 事件比对，区分"程序摆放"
+    /// 与"用户拖动"（只有用户拖动才写入持久化）。
+    last_programmatic_pos: Mutex<std::collections::HashMap<String, PhysicalPosition<i32>>>,
     /// Agent tool registry, initialized with all Windows tools at startup.
     tool_registry: std::sync::Mutex<ToolRegistry>,
     /// Agent conversation session, persists across messages within a session.
@@ -178,6 +194,9 @@ impl Default for AppState {
             last_qq_message: Mutex::new(None),
             selection_revision: AtomicU64::new(0),
             user_positioned: AtomicBool::new(false),
+            window_state: Mutex::new(window_state::load()),
+            window_save_pending: AtomicBool::new(false),
+            last_programmatic_pos: Mutex::new(Default::default()),
             tool_registry: std::sync::Mutex::new({
                 let mut reg = ToolRegistry::new();
                 lingxi_tools_windows::register_default_tools(&mut reg);
@@ -514,25 +533,65 @@ fn set_pet_options(
     Ok(view)
 }
 
+#[derive(Serialize)]
+struct WindowOptionsView {
+    panel_auto_hide: bool,
+    panel_remember_position: bool,
+}
+
 #[tauri::command]
-fn toggle_panel(app: AppHandle) -> Result<bool, String> {
+fn get_window_options(state: State<AppState>) -> WindowOptionsView {
+    let settings = state.backend.safe_lock();
+    WindowOptionsView {
+        panel_auto_hide: settings.panel_auto_hide,
+        panel_remember_position: settings.panel_remember_position,
+    }
+}
+
+/// 窗口行为开关。关掉"记住位置"时同时清空已存的面板位置与拖动标志，
+/// 面板立即回到"跟随光标出现"模式。
+#[tauri::command]
+fn set_window_options(
+    state: State<AppState>,
+    panel_auto_hide: bool,
+    panel_remember_position: bool,
+) -> Result<(), String> {
+    {
+        let mut settings = state.backend.safe_lock();
+        settings.panel_auto_hide = panel_auto_hide;
+        settings.panel_remember_position = panel_remember_position;
+        persist_backend_settings(&settings)?;
+    }
+    if !panel_remember_position {
+        state.user_positioned.store(false, Ordering::Relaxed);
+        let mut windows = state.window_state.safe_lock();
+        windows.panel = None;
+        window_state::persist(&windows)?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn toggle_panel(app: AppHandle, state: State<AppState>) -> Result<bool, String> {
     let window = app
         .get_webview_window("main")
         .ok_or("panel window is unavailable")?;
     let visible = window.is_visible().map_err(|error| error.to_string())?;
     if visible {
-        window.hide().map_err(|error| error.to_string())?;
-        if let Some(pet) = app.get_webview_window("pet") {
-            let _ = pet.show();
-        }
+        hide_panel_quietly(&app);
         Ok(false)
     } else {
         // Keep the two always-on-top windows from covering each other. The pet
         // returns as soon as the panel is closed.
-        if let Some(pet) = app.get_webview_window("pet") {
-            let _ = pet.hide();
+        if pet_allowed(&app) {
+            if let Some(pet) = app.get_webview_window("pet") {
+                let _ = pet.hide();
+            }
         }
-        position_overlay(&window);
+        // 尊重用户拖动过的位置；从未拖动时才跟随光标出现。
+        if !state.user_positioned.load(Ordering::Relaxed) {
+            position_overlay(&app, &window);
+        }
         window.show().map_err(|error| error.to_string())?;
         Ok(true)
     }
@@ -940,16 +999,117 @@ fn undo_last(state: State<AppState>) -> Result<(), String> {
     Ok(())
 }
 
+/// 收起主面板的统一出口：隐藏面板、按设置放回桌宠、桌宠状态归位。
+/// 关闭按钮/Esc/失焦自动收起共用，保证行为一致。
+fn hide_panel_quietly(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        if let Err(error) = window.hide() {
+            eprintln!("[lingxi] hide panel failed: {error}");
+        }
+    }
+    if pet_allowed(app) {
+        if let Some(pet) = app.get_webview_window("pet") {
+            let _ = pet.show();
+        }
+    }
+    let state = app.state::<AppState>();
+    *state.pet_status.safe_lock() = "idle".into();
+}
+
+fn pet_allowed(app: &AppHandle) -> bool {
+    app.state::<AppState>().backend.safe_lock().pet_visible
+}
+
 /// Hide the overlay (called by the close button / Esc).
 #[tauri::command]
-fn hide_overlay(app: AppHandle, state: State<AppState>) {
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.hide();
+fn hide_overlay(app: AppHandle) {
+    hide_panel_quietly(&app);
+}
+
+/// 面板失焦自动收起。面板默认是非激活窗口（不抢焦点），拿不到可靠的
+/// blur 事件，因此用前台窗口轮询判断"用户是否已切去别的应用"：
+/// 记住面板弹出时的前台窗口为锚点；前台换成其他进程的窗口并停留约
+/// 1.2 秒，视为用户已离开，自动收起面板。焦点在本进程任何窗口
+/// （面板输入态/桌宠/小组件/候选窗）时永不收起。
+fn spawn_panel_autohide_worker(app: AppHandle) {
+    thread::spawn(move || {
+        let mut prev_visible = false;
+        let mut anchor: isize = 0;
+        let mut misses: u32 = 0;
+        loop {
+            thread::sleep(Duration::from_millis(400));
+            let Some(panel) = app.get_webview_window("main") else {
+                continue;
+            };
+            let Ok(visible) = panel.is_visible() else {
+                continue;
+            };
+            let auto_hide = app
+                .state::<AppState>()
+                .backend
+                .safe_lock()
+                .panel_auto_hide;
+            if !visible || !auto_hide {
+                if prev_visible {
+                    eprintln!("[lingxi] autohide: disengaged (visible={visible}, auto_hide={auto_hide})");
+                }
+                prev_visible = false;
+                anchor = 0;
+                misses = 0;
+                continue;
+            }
+            // SAFETY: GetForegroundWindow is thread-safe and never blocks.
+            let fg = unsafe { GetForegroundWindow() }.0 as isize;
+            if !prev_visible {
+                // 刚显示：锚定用户此刻所在的应用。
+                prev_visible = true;
+                anchor = if is_our_process_hwnd(fg) { 0 } else { fg };
+                misses = 0;
+                eprintln!("[lingxi] autohide: engaged, anchor={anchor:#x}");
+                continue;
+            }
+            if fg == 0 || is_our_process_hwnd(fg) {
+                misses = 0;
+                continue;
+            }
+            if anchor == 0 {
+                anchor = fg;
+                misses = 0;
+                eprintln!("[lingxi] autohide: late anchor={anchor:#x}");
+                continue;
+            }
+            if fg == anchor {
+                misses = 0;
+                continue;
+            }
+            misses += 1;
+            eprintln!("[lingxi] autohide: miss {misses}, fg={fg:#x}, anchor={anchor:#x}");
+            if misses >= 3 {
+                eprintln!("[lingxi] autohide: foreground left anchor for 1.2s, hiding panel");
+                hide_panel_quietly(&app);
+                thread::sleep(Duration::from_millis(250));
+                if let Some(panel) = app.get_webview_window("main") {
+                    eprintln!(
+                        "[lingxi] autohide: post-hide visible={:?}",
+                        panel.is_visible()
+                    );
+                }
+                prev_visible = false;
+                anchor = 0;
+                misses = 0;
+            }
+        }
+    });
+}
+
+fn is_our_process_hwnd(raw: isize) -> bool {
+    if raw == 0 {
+        return false;
     }
-    if let Some(pet) = app.get_webview_window("pet") {
-        let _ = pet.show();
-    }
-    *state.pet_status.safe_lock() = "idle".into();
+    let mut pid: u32 = 0;
+    // SAFETY: `HWND` is a plain handle value; GetWindowThreadProcessId only reads it.
+    unsafe { GetWindowThreadProcessId(HWND(raw as _), Some(&mut pid)) };
+    pid == std::process::id()
 }
 
 /// Quit the entire LingXi process (called by the "退出灵犀" button).
@@ -966,7 +1126,10 @@ fn quit_app(app: AppHandle) {
 /// unreliable for a non-activating WebView window.
 #[tauri::command]
 fn start_window_drag(window: WebviewWindow, state: State<AppState>) -> Result<(), String> {
-    state.user_positioned.store(true, Ordering::Relaxed);
+    // 只有面板被拖动才锁定位置；拖桌宠不应影响面板的跟随光标行为。
+    if window.label() == "main" {
+        state.user_positioned.store(true, Ordering::Relaxed);
+    }
     window.start_dragging().map_err(|error| error.to_string())
 }
 
@@ -1101,7 +1264,7 @@ fn on_transform(app: &AppHandle) {
                 // Respect a position chosen by dragging. Before the first drag,
                 // place the panel near the selection/cursor automatically.
                 if !state.user_positioned.load(Ordering::Relaxed) {
-                    position_overlay(&window);
+                    position_overlay(app, &window);
                 }
                 let _ = window.show();
             }
@@ -1115,7 +1278,7 @@ fn on_transform(app: &AppHandle) {
 /// transparent, borderless window (its size isn't settled at creation), so we
 /// place it explicitly on every show. Win32 (physical px), the monitor work
 /// area, and Tauri's PhysicalPosition all agree under per-monitor DPI.
-fn position_overlay(window: &WebviewWindow) {
+fn position_overlay(app: &AppHandle, window: &WebviewWindow) {
     let mut cursor = POINT::default();
     // SAFETY: GetCursorPos writes the current cursor position into `cursor`.
     if unsafe { GetCursorPos(&mut cursor) }.is_err() {
@@ -1144,10 +1307,10 @@ fn position_overlay(window: &WebviewWindow) {
     // the whole window inside the work area.
     let x = (cursor.x + 24).min(work.right - w).max(work.left);
     let y = (cursor.y + 24).min(work.bottom - h).max(work.top);
-    let _ = window.set_position(PhysicalPosition::new(x, y));
+    set_position_tracked(app, window, x, y);
 }
 
-fn position_pet(window: &WebviewWindow) {
+fn position_pet(app: &AppHandle, window: &WebviewWindow) {
     // Place the whole pet inside the monitor work area (excluding taskbar).
     // `current_monitor().size()` includes the taskbar and could leave the lower
     // torso clipped, especially under Windows display scaling.
@@ -1167,7 +1330,75 @@ fn position_pet(window: &WebviewWindow) {
     let size = window.outer_size().unwrap_or(PhysicalSize::new(220, 260));
     let x = (work.right - size.width as i32 - 24).max(work.left);
     let y = (work.bottom - size.height as i32 - 24).max(work.top);
+    set_position_tracked(app, window, x, y);
+}
+
+/// 程序化摆放窗口：先记录目标位置，Moved 事件与它一致时视为程序摆放，
+/// 不当作用户拖动写入持久化。
+fn set_position_tracked(app: &AppHandle, window: &WebviewWindow, x: i32, y: i32) {
+    let state = app.state::<AppState>();
+    state
+        .last_programmatic_pos
+        .safe_lock()
+        .insert(window.label().to_string(), PhysicalPosition::new(x, y));
     let _ = window.set_position(PhysicalPosition::new(x, y));
+}
+
+/// 窗口中心是否落在某块已连接的显示器上（拔掉显示器后旧坐标失效）。
+fn position_on_screen(x: i32, y: i32, w: i32, h: i32) -> bool {
+    if w <= 0 || h <= 0 {
+        return false;
+    }
+    let center = POINT {
+        x: x + w / 2,
+        y: y + h / 2,
+    };
+    // SAFETY: MonitorFromPoint with DEFAULTTONULL only reads the point value.
+    let monitor = unsafe { MonitorFromPoint(center, MONITOR_DEFAULTTONULL) };
+    !monitor.is_invalid()
+}
+
+/// 用户拖动后的落点：写入内存状态并防抖落盘。拖动过程会连续触发 Moved，
+/// 防抖保证一次拖动最终只写一次盘（trailing edge，不丢最终位置）。
+fn handle_window_moved(app: &AppHandle, label: &str, pos: PhysicalPosition<i32>) {
+    let state = app.state::<AppState>();
+    {
+        let programmatic = state.last_programmatic_pos.safe_lock();
+        if programmatic.get(label) == Some(&pos) {
+            return;
+        }
+    }
+    let mut windows = state.window_state.safe_lock();
+    let entry = window_state::WindowPos {
+        x: pos.x,
+        y: pos.y,
+    };
+    if label == "main" {
+        windows.panel = Some(entry);
+        state.user_positioned.store(true, Ordering::Relaxed);
+    } else {
+        windows.pet = Some(entry);
+    }
+    drop(windows);
+    schedule_window_state_persist(app);
+}
+
+fn schedule_window_state_persist(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    if state.window_save_pending.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let app = app.clone();
+    thread::spawn(move || {
+        thread::sleep(Duration::from_millis(500));
+        let state = app.state::<AppState>();
+        if state.window_save_pending.swap(false, Ordering::SeqCst) {
+            let snapshot = state.window_state.safe_lock().clone();
+            if let Err(error) = window_state::persist(&snapshot) {
+                eprintln!("[lingxi] window_state persist failed: {error}");
+            }
+        }
+    });
 }
 
 fn on_undo(app: &AppHandle) {
@@ -2449,18 +2680,61 @@ fn main() {
             widget_clipboard_write,
             widget_clipboard_clear,
             widget_clipboard_remove,
-            widget_read_clipboard
+            widget_read_clipboard,
+            get_window_options,
+            set_window_options
         ])
+        .on_window_event(|window, event| {
+            if let WindowEvent::Moved(pos) = event {
+                let label = window.label();
+                if label == "main" || label == "pet" {
+                    handle_window_moved(&window.app_handle().clone(), label, *pos);
+                }
+            }
+        })
         .setup(|app| {
+            let state = app.state::<AppState>();
+            let (remember_position, pet_visible, saved) = {
+                let settings = state.backend.safe_lock();
+                let windows = state.window_state.safe_lock();
+                (
+                    settings.panel_remember_position,
+                    settings.pet_visible,
+                    windows.clone(),
+                )
+            };
             if let Some(window) = app.get_webview_window("main") {
                 make_non_activating(&window).map_err(std::io::Error::other)?;
+                // 恢复上次拖动后的面板位置（显示器已拔掉则回落跟随光标）。
+                if remember_position {
+                    if let Some(pos) = saved.panel {
+                        let size = window.outer_size().unwrap_or(PhysicalSize::new(520, 520));
+                        if position_on_screen(
+                            pos.x,
+                            pos.y,
+                            size.width as i32,
+                            size.height as i32,
+                        ) {
+                            set_position_tracked(app.handle(), &window, pos.x, pos.y);
+                            state.user_positioned.store(true, Ordering::Relaxed);
+                        }
+                    }
+                }
             }
             if let Some(window) = app.get_webview_window("pet") {
                 make_non_activating(&window).map_err(std::io::Error::other)?;
-                position_pet(&window);
-                // 上次会话隐藏了桌宠：启动时保持隐藏。
-                if !app.state::<AppState>().backend.safe_lock().pet_visible {
-                    let _ = window.hide();
+                let size = window.outer_size().unwrap_or(PhysicalSize::new(220, 260));
+                let restored = saved.pet.filter(|pos| {
+                    position_on_screen(pos.x, pos.y, size.width as i32, size.height as i32)
+                });
+                match restored {
+                    Some(pos) => set_position_tracked(app.handle(), &window, pos.x, pos.y),
+                    None => position_pet(app.handle(), &window),
+                }
+                // 配置里 visible:false 避免先在默认位置闪现再跳到恢复位置；
+                // 摆好之后按设置决定是否显示。
+                if pet_visible {
+                    let _ = window.show();
                 }
             }
             // Only local users need the GGUF. A persisted cloud configuration
@@ -2470,6 +2744,7 @@ fn main() {
             }
             spawn_hotkey_worker(app.handle().clone());
             spawn_widget_hotkey_worker(app.handle().clone());
+            spawn_panel_autohide_worker(app.handle().clone());
             spawn_qq_foreground_sampler();
             spawn_clipboard_listener();
             install_tray(app.handle())?;
