@@ -1,0 +1,75 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 240">
+  <style>
+    .b{animation:br 3.6s ease-in-out infinite;transform-box:fill-box;transform-origin:50% 98%}
+    .e{animation:bl 4.8s infinite;transform-box:fill-box;transform-origin:center}
+    .r{animation:ew 3.8s ease-in-out infinite;transform-box:fill-box;transform-origin:50% 90%}
+    .s1,.s2,.s3{transform-box:fill-box;transform-origin:center;animation:sn 3.6s linear infinite}
+    .s2{animation-delay:1.2s}.s3{animation-delay:2.4s}
+    @keyframes br{0%,100%{transform:scale(1,1)}50%{transform:scale(1.012,1.03)}}
+    @keyframes bl{0%,90.5%,94.5%,100%{transform:scaleY(1)}92.5%{transform:scaleY(.06)}}
+    @keyframes ew{0%,86%,100%{transform:rotate(0)}90%{transform:rotate(-4deg)}94%{transform:rotate(3deg)}}
+    @keyframes sn{0%{transform:translateY(-8px);opacity:0}18%{opacity:.95}100%{transform:translateY(30px);opacity:0}}
+  </style>
+  <defs>
+    <radialGradient id="gb" cx="38%" cy="28%" r="92%">
+      <stop offset="0%" stop-color="#FFFFFF"/>
+      <stop offset="58%" stop-color="#EAF1F9"/>
+      <stop offset="100%" stop-color="#C7D5E6"/>
+    </radialGradient>
+    <radialGradient id="gh" cx="40%" cy="26%" r="86%">
+      <stop offset="0%" stop-color="#FFFFFF"/>
+      <stop offset="55%" stop-color="#F3F7FC"/>
+      <stop offset="100%" stop-color="#D3E0EE"/>
+    </radialGradient>
+  </defs>
+
+  <g class="b">
+    <!-- 身体 -->
+    <ellipse cx="78" cy="226" rx="18" ry="10" fill="#BCCCE0"/>
+    <ellipse cx="122" cy="226" rx="18" ry="10" fill="#BCCCE0"/>
+    <ellipse cx="100" cy="186" rx="50" ry="43" fill="url(#gb)"/>
+    <ellipse cx="100" cy="196" rx="29" ry="24" fill="#FDFEFF"/>
+    <ellipse cx="57" cy="180" rx="10" ry="14" fill="#DCE7F2" transform="rotate(24 57 180)"/>
+    <ellipse cx="143" cy="180" rx="10" ry="14" fill="#DCE7F2" transform="rotate(-24 143 180)"/>
+    <!-- 围巾：绕脖一圈 + 垂边 -->
+    <path d="M55 140 Q100 160 145 140 L147 152 Q100 172 53 152 Z" fill="#6FA6E0"/>
+    <path d="M60 144 Q100 161 140 144" fill="none" stroke="#8FC0EE" stroke-width="4" stroke-linecap="round" opacity=".7"/>
+    <path d="M107 154 L126 151 L130 182 Q120 189 107 184 Z" fill="#7FB3E8"/>
+    <path d="M111 184 l2 7 M118 186 l2 7 M125 184 l2 6" stroke="#7FB3E8" stroke-width="3.4" stroke-linecap="round"/>
+    <!-- 头 + 熊耳 -->
+    <g class="r">
+      <circle cx="60" cy="46" r="14" fill="#EDF3FA"/>
+      <circle cx="60" cy="46" r="7" fill="#BFDCF2"/>
+    </g>
+    <g class="r">
+      <circle cx="140" cy="46" r="14" fill="#EDF3FA"/>
+      <circle cx="140" cy="46" r="7" fill="#BFDCF2"/>
+    </g>
+    <ellipse cx="100" cy="95" rx="58" ry="53" fill="url(#gh)"/>
+    <!-- 眼睛 -->
+    <g class="e">
+      <circle cx="74" cy="90" r="9" fill="#2A3550"/>
+      <circle cx="77" cy="86.8" r="3" fill="#fff"/>
+      <circle cx="71.5" cy="93" r="1.4" fill="#fff" opacity=".85"/>
+    </g>
+    <g class="e">
+      <circle cx="126" cy="90" r="9" fill="#2A3550"/>
+      <circle cx="129" cy="86.8" r="3" fill="#fff"/>
+      <circle cx="123.5" cy="93" r="1.4" fill="#fff" opacity=".85"/>
+    </g>
+    <ellipse cx="52" cy="112" rx="10" ry="6" fill="#FFC2D4" opacity=".7"/>
+    <ellipse cx="148" cy="112" rx="10" ry="6" fill="#FFC2D4" opacity=".7"/>
+    <!-- 熊鼻吻 -->
+    <ellipse cx="100" cy="112" rx="20" ry="14" fill="#FFFFFF"/>
+    <path d="M94 106 Q100 103 106 106 Q106 112 100 114 Q94 112 94 106 Z" fill="#3A4763"/>
+    <path d="M100 114 v3" stroke="#5A7A9E" stroke-width="3" stroke-linecap="round"/>
+    <path d="M92 120 Q100 127 108 120" fill="none" stroke="#5A7A9E" stroke-width="3.6" stroke-linecap="round"/>
+  </g>
+
+  <!-- 飘雪 -->
+  <g fill="#BFDCF2">
+    <path class="s1" d="M52 30 l2.6 7 7 2.6 -7 2.6 -2.6 7 -2.6 -7 -7 -2.6 7 -2.6 z"/>
+    <path class="s2" d="M152 22 l2.2 6 6 2.2 -6 2.2 -2.2 6 -2.2 -6 -6 -2.2 6 -2.2 z"/>
+    <path class="s3" d="M172 62 l1.9 5 5 1.9 -5 1.9 -1.9 5 -1.9 -5 -5 -1.9 5 -1.9 z"/>
+  </g>
+</svg>

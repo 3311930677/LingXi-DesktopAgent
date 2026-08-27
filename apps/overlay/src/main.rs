@@ -1,4 +1,4 @@
-﻿//! LingXi overlay: a Tauri floating window over the capture/transform/write
+//! LingXi overlay: a Tauri floating window over the capture/transform/write
 //! pipeline.
 //!
 //! Flow:
@@ -82,11 +82,15 @@ fn main() {
             widgets::list_open_widgets,
             widgets::widget_capture_screen,
             widgets::widget_ocr,
-            widgets::widget_pick_color,
+            widgets::widget_ocr_fullscreen,
+            widgets::widget_pick_color_lens,
+            widgets::widget_lens_get_image,
+            widgets::widget_lens_pick,
+            widgets::widget_lens_cancel,
             widgets::widget_get_weather,
             widgets::widget_calculate,
             widgets::widget_translate,
-            widgets::widget_capture_and_translate,
+            widgets::widget_translate_lines,
             widgets::widget_clipboard_history,
             widgets::widget_clipboard_write,
             widgets::widget_clipboard_clear,

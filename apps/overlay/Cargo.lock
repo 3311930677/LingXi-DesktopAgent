@@ -2942,6 +2942,7 @@ dependencies = [
  "assistant-core",
  "assistant-inference",
  "assistant-windows",
+ "base64 0.22.1",
  "dirs 5.0.1",
  "futures",
  "lingxi-agent",

@@ -62,12 +62,12 @@ pub fn builtin_widgets() -> Vec<WidgetManifest> {
             label: "全屏翻译",
             icon: "🌐",
             shortcut: "Ctrl+Alt+T",
-            width: 460.0,
-            height: 440.0,
+            width: 880.0,
+            height: 620.0,
             resizable: true,
             always_on_top: false,
             page: "widgets/translate.html",
-            description: "框选区域识别并翻译",
+            description: "截屏识别，原位覆盖翻译",
         },
         WidgetManifest {
             id: "widget-colorpicker",
@@ -260,6 +260,125 @@ pub(crate) async fn widget_capture_screen() -> Result<serde_json::Value, String>
     }
 }
 
+/// One OCR-recognized text line with its bounding box, in pixels relative to
+/// the captured image (not the screen).
+#[derive(Clone, Debug, serde::Serialize)]
+pub(crate) struct OcrLine {
+    pub text: String,
+    pub x: f64,
+    pub y: f64,
+    pub w: f64,
+    pub h: f64,
+}
+
+/// The WinRT OCR PowerShell script. Loaded via WinRT projections and the
+/// AsTask await helper (there is no `.AwaitResult()` in PowerShell). The
+/// image path is passed through the LINGXI_OCR_PATH env var so the script
+/// needs no string interpolation (and no brace escaping).
+///
+/// Output: a JSON array `[{"text","x","y","w","h"}, ...]` on stdout, errors
+/// on stderr with a non-zero exit code.
+#[cfg(windows)]
+const WINRT_OCR_SCRIPT: &str = r#"
+$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$null = [Windows.Storage.StorageFile, Windows.Storage, ContentType=WindowsRuntime]
+$null = [Windows.Graphics.Imaging.BitmapDecoder, Windows.Graphics.Imaging, ContentType=WindowsRuntime]
+$null = [Windows.Media.Ocr.OcrEngine, Windows.Media.Ocr, ContentType=WindowsRuntime]
+Add-Type -AssemblyName System.Runtime.WindowsRuntime
+
+$asTaskGeneric = ([System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object {
+    $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and
+    $_.GetParameters()[0].ParameterType.Name -like 'IAsyncOperation*'
+})[0]
+function Await($WinRtTask, $ResultType) {
+    $asTask = $asTaskGeneric.MakeGenericMethod($ResultType)
+    $netTask = $asTask.Invoke($null, @($WinRtTask))
+    $netTask.Wait(-1) | Out-Null
+    $netTask.Result
+}
+
+try {
+    $path = $env:LINGXI_OCR_PATH
+    $file = Await ([Windows.Storage.StorageFile]::GetFileFromPathAsync($path)) ([Windows.Storage.StorageFile])
+    $stream = Await ($file.OpenAsync([Windows.Storage.FileAccessMode]::Read)) ([Windows.Storage.Streams.IRandomAccessStream])
+    $decoder = Await ([Windows.Graphics.Imaging.BitmapDecoder]::CreateAsync($stream)) ([Windows.Graphics.Imaging.BitmapDecoder])
+    $bmp = Await ($decoder.GetSoftwareBitmapAsync()) ([Windows.Graphics.Imaging.SoftwareBitmap])
+    $engine = [Windows.Media.Ocr.OcrEngine, Windows.Media.Ocr, ContentType=WindowsRuntime]::TryCreateFromUserProfileLanguages()
+    if (-not $engine) { Write-Output '[]'; exit 0 }
+    $result = Await ($engine.RecognizeAsync($bmp)) ([Windows.Media.Ocr.OcrResult])
+    $out = @()
+    foreach ($line in $result.Lines) {
+        $minX = [double]::MaxValue; $minY = [double]::MaxValue
+        $maxR = [double]::MinValue; $maxB = [double]::MinValue
+        foreach ($word in $line.Words) {
+            $rect = $word.BoundingRect
+            $minX = [Math]::Min($minX, $rect.X)
+            $minY = [Math]::Min($minY, $rect.Y)
+            $maxR = [Math]::Max($maxR, $rect.X + $rect.Width)
+            $maxB = [Math]::Max($maxB, $rect.Y + $rect.Height)
+        }
+        $out += @{
+            text = $line.Text
+            x = [Math]::Round($minX, 1)
+            y = [Math]::Round($minY, 1)
+            w = [Math]::Round($maxR - $minX, 1)
+            h = [Math]::Round($maxB - $minY, 1)
+        }
+    }
+    if ($out.Count -eq 0) { Write-Output '[]' } else { Write-Output ($out | ConvertTo-Json -Compress) }
+} catch {
+    [Console]::Error.WriteLine($_.Exception.Message)
+    exit 1
+}
+"#;
+
+/// Run WinRT OCR (via PowerShell) on a PNG file, returning text lines with
+/// position info. Stderr is surfaced in the error so failures are diagnosable
+/// (the old script failed silently and the UI just showed "未识别到文字").
+#[cfg(windows)]
+fn run_winrt_ocr(png_path: &std::path::Path) -> Result<Vec<OcrLine>, String> {
+    let output = std::process::Command::new("powershell")
+        .env("LINGXI_OCR_PATH", png_path)
+        .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", WINRT_OCR_SCRIPT])
+        .output()
+        .map_err(|e| format!("启动 PowerShell 失败: {e}"))?;
+
+    if !output.status.success() {
+        let err = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(format!(
+            "WinRT OCR 失败: {}",
+            if err.is_empty() { "未知错误（无 stderr 输出）".to_string() } else { err }
+        ));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if stdout.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // ConvertTo-Json emits a bare object (not an array) when there is exactly
+    // one line; normalize both shapes.
+    let value: serde_json::Value =
+        serde_json::from_str(&stdout).map_err(|e| format!("解析 OCR 结果失败: {e}\n原始输出: {stdout}"))?;
+    let items = match value {
+        serde_json::Value::Array(arr) => arr,
+        obj @ serde_json::Value::Object(_) => vec![obj],
+        other => return Err(format!("OCR 结果格式异常: {other}")),
+    };
+
+    let mut lines = Vec::with_capacity(items.len());
+    for item in items {
+        let text = item.get("text").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+        if text.is_empty() {
+            continue;
+        }
+        let num = |k: &str| item.get(k).and_then(|v| v.as_f64()).unwrap_or(0.0);
+        lines.push(OcrLine { text, x: num("x"), y: num("y"), w: num("w"), h: num("h") });
+    }
+    Ok(lines)
+}
+
 /// Capture a screen region and run OCR on it.
 ///
 /// OCR launches PowerShell + WinRT OcrEngine which takes 2-6 seconds. Running
@@ -269,43 +388,33 @@ pub(crate) async fn widget_capture_screen() -> Result<serde_json::Value, String>
 pub(crate) async fn widget_ocr(x: i32, y: i32, w: i32, h: i32) -> Result<serde_json::Value, String> {
     #[cfg(windows)]
     {
+        use base64::Engine as _;
         let result = tauri::async_runtime::spawn_blocking(move || {
-            // First capture the region as a data URL so the frontend can display it.
-            let data_url = lingxi_tools_windows::screen_capture::capture_region_as_data_url(x, y, w, h)?;
-
-            // Try WinRT OCR via PowerShell (Windows 10+ has built-in OCR).
-            let temp_path = std::env::temp_dir().join("lingxi_ocr_temp.png");
-            let png_data = lingxi_tools_windows::screen_capture::capture_region(x, y, w, h)?;
-            let png_bytes = lingxi_tools_windows::screen_capture::encode_png(&png_data)?;
-            std::fs::write(&temp_path, &png_bytes).map_err(|e| format!("写入临时文件失败: {e}"))?;
-
-            let script = format!(
-                r#"
-            Add-Type -AssemblyName System.Windows.Media
-            $bmp = [System.Windows.Media.Imaging.BitmapFrame]::Create([System.IO.File]::OpenRead('{}'))
-            $engine = [Windows.Media.Ocr.OcrEngine]::TryCreateFromLanguage([Windows.Globalization.Language]::CreateLanguage('zh-Hans-CN'))
-            if (-not $engine) {{ $engine = [Windows.Media.Ocr.OcrEngine]::TryCreateFromUserProfileLanguages() }}
-            if (-not $engine) {{ Write-Output ''; exit }}
-            $result = $engine.RecognizeAsync($bmp).AwaitResult()
-            Write-Output $result.Text
-            "#,
-                temp_path.display()
+            // Capture once; the same PNG bytes back the data URL and the OCR
+            // input so both always show the same frame.
+            let img = lingxi_tools_windows::screen_capture::capture_region(x, y, w, h)?;
+            let png_bytes = lingxi_tools_windows::screen_capture::encode_png(&img)?;
+            let data_url = format!(
+                "data:image/png;base64,{}",
+                base64::engine::general_purpose::STANDARD.encode(&png_bytes)
             );
 
-            let output = std::process::Command::new("powershell")
-                .args(["-NoProfile", "-NonInteractive", "-Command", &script])
-                .output();
-
-            let text = match output {
-                Ok(out) => String::from_utf8_lossy(&out.stdout).trim().to_string(),
-                Err(_) => String::new(),
-            };
-
+            let temp_path = std::env::temp_dir().join("lingxi_ocr_temp.png");
+            std::fs::write(&temp_path, &png_bytes)
+                .map_err(|e| format!("写入临时文件失败: {e}"))?;
+            let lines = run_winrt_ocr(&temp_path);
             let _ = std::fs::remove_file(&temp_path);
+            let lines = lines?;
 
+            let text = lines
+                .iter()
+                .map(|l| l.text.clone())
+                .collect::<Vec<_>>()
+                .join("\n");
             Ok::<_, String>(serde_json::json!({
                 "text": text,
                 "image": data_url,
+                "lines": lines,
             }))
         })
         .await
@@ -321,66 +430,174 @@ pub(crate) async fn widget_ocr(x: i32, y: i32, w: i32, h: i32) -> Result<serde_j
     }
 }
 
-/// Read the pixel color at the current cursor position.
+/// Capture the full screen and OCR it, returning the screenshot plus every
+/// recognized line with its bounding box. Used by the full-screen translate
+/// widget to overlay translations at their original positions (有道拍照
+/// 翻译-style). The translate widget window is hidden first so it does not
+/// cover the content being captured.
 #[tauri::command]
-pub(crate) async fn widget_pick_color(app: AppHandle) -> Result<serde_json::Value, String> {
+pub(crate) async fn widget_ocr_fullscreen(
+    app: AppHandle,
+) -> Result<serde_json::Value, String> {
     #[cfg(windows)]
     {
-        use windows::Win32::Foundation::POINT;
-        use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_ESCAPE, VK_LBUTTON};
-        use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
+        use base64::Engine as _;
 
-        // Interactive picking: hide the picker window first, let the user move
-        // the mouse anywhere, and read the pixel where they left-click. The
-        // old version read the pixel at the cursor the instant the button was
-        // pressed — which was always the button's own color.
-        let window = app
-            .get_webview_window("widget-colorpicker")
-            .ok_or("取色器窗口未打开")?;
-        window.hide().map_err(|e| format!("隐藏窗口失败: {e}"))?;
-        std::thread::sleep(Duration::from_millis(120));
+        let window = app.get_webview_window("widget-translate");
+        if let Some(w) = window.as_ref() {
+            let _ = w.hide();
+        }
+        // Give the compositor a moment to actually take the window off screen.
+        std::thread::sleep(Duration::from_millis(250));
 
-        let result = tauri::async_runtime::spawn_blocking(move || {
-            // Wait for the left button that triggered this command to be
-            // released, so we don't instantly pick the button pixel.
-            for _ in 0..200 {
-                if unsafe { GetAsyncKeyState(VK_LBUTTON.0 as i32) } >= 0 {
-                    break;
-                }
-                std::thread::sleep(Duration::from_millis(15));
-            }
+        let result = tauri::async_runtime::spawn_blocking(|| {
+            let img = lingxi_tools_windows::screen_capture::capture_screen()?;
+            let png_bytes = lingxi_tools_windows::screen_capture::encode_png(&img)?;
+            let data_url = format!(
+                "data:image/png;base64,{}",
+                base64::engine::general_purpose::STANDARD.encode(&png_bytes)
+            );
 
-            let deadline = std::time::Instant::now() + Duration::from_secs(60);
-            loop {
-                if unsafe { GetAsyncKeyState(VK_ESCAPE.0 as i32) } < 0 {
-                    return Err("已取消取色".to_string());
-                }
-                if unsafe { GetAsyncKeyState(VK_LBUTTON.0 as i32) } < 0 {
-                    let mut point = POINT::default();
-                    unsafe { GetCursorPos(&mut point).map_err(|e| format!("GetCursorPos: {e}"))? };
-                    let (r, g, b) =
-                        lingxi_tools_windows::screen_capture::read_pixel(point.x, point.y)?;
-                    return Ok(serde_json::json!({
-                        "r": r, "g": g, "b": b, "x": point.x, "y": point.y,
-                    }));
-                }
-                if std::time::Instant::now() > deadline {
-                    return Err("取色超时（60秒未点击）".to_string());
-                }
-                std::thread::sleep(Duration::from_millis(15));
-            }
+            let temp_path = std::env::temp_dir().join("lingxi_ocr_full.png");
+            std::fs::write(&temp_path, &png_bytes)
+                .map_err(|e| format!("写入临时文件失败: {e}"))?;
+            let lines = run_winrt_ocr(&temp_path);
+            let _ = std::fs::remove_file(&temp_path);
+            let lines = lines?;
+
+            Ok::<_, String>(serde_json::json!({
+                "image": data_url,
+                "lines": lines,
+                "width": img.width,
+                "height": img.height,
+            }))
         })
         .await
-        .map_err(|e| format!("取色任务失败: {e}"))?;
+        .map_err(|e| format!("截图识别任务失败: {e}"))?;
 
-        window.show().map_err(|e| format!("恢复窗口失败: {e}"))?;
-        let _ = window.set_focus();
-        result
+        if let Some(w) = window.as_ref() {
+            let _ = w.show();
+            let _ = w.set_focus();
+        }
+        tokio::time::timeout(Duration::from_secs(30), async move { result })
+            .await
+            .map_err(|_| "截图识别超时（30秒）".to_string())?
     }
     #[cfg(not(windows))]
     {
         let _ = app;
         Err("仅支持 Windows".to_string())
+    }
+}
+
+/// 全屏取色（放大镜模式）：截取主屏后打开全屏取色窗口（colorlens.html），
+/// 前端直接从截图采样并在光标旁显示放大镜 HUD；左键确认、Esc/右键取消。
+/// 取代旧的 `widget_pick_color` 轮询方案（无任何视觉反馈）。
+#[tauri::command]
+pub(crate) async fn widget_pick_color_lens(app: AppHandle) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        use base64::Engine as _;
+
+        // 异常路径残留的取色窗口先关掉，避免读到旧截图。
+        if let Some(old) = app.get_webview_window("color-lens") {
+            let _ = old.destroy();
+        }
+
+        let data_url = tauri::async_runtime::spawn_blocking(|| {
+            let img = lingxi_tools_windows::screen_capture::capture_screen()?;
+            let png = lingxi_tools_windows::screen_capture::encode_png(&img)?;
+            Ok::<_, String>(format!(
+                "data:image/png;base64,{}",
+                base64::engine::general_purpose::STANDARD.encode(&png)
+            ))
+        })
+        .await
+        .map_err(|e| format!("截图任务失败: {e}"))??;
+
+        {
+            let state = app.state::<AppState>();
+            *state.lens_image.safe_lock() = Some(data_url);
+        }
+
+        // 隐藏取色器窗口，避免它挡在放大镜 HUD 下面。
+        if let Some(cp) = app.get_webview_window("widget-colorpicker") {
+            let _ = cp.hide();
+        }
+
+        let app2 = app.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            WebviewWindowBuilder::new(
+                &app2,
+                "color-lens",
+                tauri::WebviewUrl::App("widgets/colorlens.html".into()),
+            )
+            .title("屏幕取色")
+            .fullscreen(true)
+            .decorations(false)
+            .transparent(true)
+            .always_on_top(true)
+            .skip_taskbar(true)
+            .build()
+            .map_err(|e| e.to_string())?;
+            Ok::<_, String>(())
+        })
+        .await
+        .map_err(|e| format!("创建取色窗口失败: {e}"))??;
+        Ok(())
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = app;
+        Err("仅支持 Windows".to_string())
+    }
+}
+
+/// 供取色窗口拉取进入取色时的屏幕截图（data URL）。
+#[tauri::command]
+pub(crate) fn widget_lens_get_image(state: tauri::State<'_, AppState>) -> Result<String, String> {
+    state
+        .lens_image
+        .safe_lock()
+        .clone()
+        .ok_or_else(|| "截图数据不存在".to_string())
+}
+
+/// 取色窗口确认取色：销毁窗口，广播颜色并恢复取色器。
+#[tauri::command]
+pub(crate) async fn widget_lens_pick(
+    app: AppHandle,
+    r: i32,
+    g: i32,
+    b: i32,
+) -> Result<(), String> {
+    use tauri::Emitter as _;
+    finish_lens(&app);
+    app.emit(
+        "color-picked",
+        serde_json::json!({ "r": r, "g": g, "b": b }),
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// 取色窗口取消（Esc / 右键）。
+#[tauri::command]
+pub(crate) async fn widget_lens_cancel(app: AppHandle) -> Result<(), String> {
+    use tauri::Emitter as _;
+    finish_lens(&app);
+    let _ = app.emit("lens-cancelled", ());
+    Ok(())
+}
+
+/// 关闭取色窗口并恢复取色器主窗口。
+fn finish_lens(app: &AppHandle) {
+    if let Some(lens) = app.get_webview_window("color-lens") {
+        let _ = lens.destroy();
+    }
+    if let Some(cp) = app.get_webview_window("widget-colorpicker") {
+        let _ = cp.show();
+        let _ = cp.set_focus();
     }
 }
 
@@ -552,68 +769,94 @@ pub(crate) async fn widget_translate(
     Ok(serde_json::json!({ "translated": translated.trim() }))
 }
 
-/// Capture screen, let user select region, OCR and translate in one step.
+/// Batch-translate OCR lines in a single LLM call. The model gets a JSON
+/// array of strings and must return a JSON array of the same length; the
+/// frontend overlays each translation at the line's original position.
+///
+/// If the model's JSON cannot be parsed or the lengths mismatch, we fall
+/// back to translating the whole block as one text and return `merged: true`
+/// so the frontend can switch to the block-text view instead of the overlay.
 #[tauri::command]
-pub(crate) async fn widget_capture_and_translate(
+pub(crate) async fn widget_translate_lines(
     state: tauri::State<'_, AppState>,
-    target_lang: String,
+    lines: Vec<String>,
+    to: String,
 ) -> Result<serde_json::Value, String> {
-    #[cfg(windows)]
-    {
-        // OCR on a blocking thread (PowerShell + WinRT takes seconds).
-        let source = tauri::async_runtime::spawn_blocking(|| {
-            let img = lingxi_tools_windows::screen_capture::capture_screen()?;
-            let temp_path = std::env::temp_dir().join("lingxi_ocr_translate.png");
-            let png_bytes = lingxi_tools_windows::screen_capture::encode_png(&img)?;
-            std::fs::write(&temp_path, &png_bytes).map_err(|e| format!("写入临时文件失败: {e}"))?;
+    let lines: Vec<String> = lines
+        .into_iter()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+        .collect();
+    if lines.is_empty() {
+        return Ok(serde_json::json!({ "translated": [], "merged": false }));
+    }
 
-            let script = format!(
-                r#"
-            Add-Type -AssemblyName System.Windows.Media
-            $bmp = [System.Windows.Media.Imaging.BitmapFrame]::Create([System.IO.File]::OpenRead('{}'))
-            $engine = [Windows.Media.Ocr.OcrEngine]::TryCreateFromUserProfileLanguages()
-            if (-not $engine) {{ Write-Output ''; exit }}
-            $result = $engine.RecognizeAsync($bmp).AwaitResult()
-            Write-Output $result.Text
-            "#,
-                temp_path.display()
-            );
+    let (api_key, base_url, model) = translation_config(&state);
+    if api_key.is_empty() {
+        return Err(
+            "翻译服务未配置：请在主面板「设置」中填写云端 API Key（或设置 \
+             LINGXI_OPENAI_API_KEY 环境变量）"
+                .to_string(),
+        );
+    }
 
-            let output = std::process::Command::new("powershell")
-                .args(["-NoProfile", "-NonInteractive", "-Command", &script])
-                .output();
-            let _ = std::fs::remove_file(&temp_path);
-            Ok::<_, String>(match output {
-                Ok(out) => String::from_utf8_lossy(&out.stdout).trim().to_string(),
-                Err(_) => String::new(),
-            })
-        })
-        .await
-        .map_err(|e| format!("截图翻译任务失败: {e}"))??;
+    let n = lines.len();
+    let input = serde_json::to_string(&lines)
+        .map_err(|e| format!("序列化输入失败: {e}"))?;
+    let system = "You are a translation engine for on-screen text. Output ONLY a valid JSON array of strings, no markdown fences, no explanations.";
+    let user = format!(
+        "Translate each element of this JSON array (screen OCR lines) into {to}. \
+         Return ONLY a JSON array of exactly {n} strings, where element i is the \
+         translation of input element i. Keep each translation concise and natural \
+         for UI display; do not merge, split, or reorder lines.\n\n{input}"
+    );
 
-        if source.is_empty() {
+    let api_key2 = api_key.clone();
+    let raw = tauri::async_runtime::spawn_blocking(move || {
+        lingxi_tools::builtin::translate::chat_completion(
+            &api_key2, &base_url, &model, &system, &user,
+        )
+    })
+    .await
+    .map_err(|e| format!("翻译任务失败: {e}"))??;
+
+    // Tolerate markdown fences around the JSON some models add.
+    let cleaned = {
+        let t = raw.trim();
+        let t = t.strip_prefix("```").map(|s| {
+            let s = s.trim_start_matches("json").trim_start_matches("JSON");
+            s
+        }).unwrap_or(t);
+        let t = t.strip_suffix("```").unwrap_or(t);
+        t.trim()
+    };
+
+    let parsed: Option<Vec<String>> = serde_json::from_str::<serde_json::Value>(cleaned)
+        .ok()
+        .and_then(|v| match v {
+            serde_json::Value::Array(arr) => Some(
+                arr.into_iter()
+                    .map(|e| e.as_str().unwrap_or_default().to_string())
+                    .collect::<Vec<_>>(),
+            ),
+            _ => None,
+        });
+
+    if let Some(translated) = parsed {
+        if translated.len() == n {
             return Ok(serde_json::json!({
-                "source": "",
-                "translated": "(未识别到文字)",
+                "translated": translated,
+                "merged": false,
             }));
         }
-
-        // Translate the recognized text.
-        let translated = match translate_text(&state, source.clone(), "auto".into(), target_lang).await {
-            Ok(t) => t,
-            Err(e) => format!("翻译失败: {e}"),
-        };
-
-        Ok(serde_json::json!({
-            "source": source,
-            "translated": translated,
-        }))
     }
-    #[cfg(not(windows))]
-    {
-        let _ = target_lang;
-        Err("仅支持 Windows".to_string())
-    }
+
+    // Fallback: one-shot translation of the whole block.
+    let merged_text = translate_text(&state, lines.join("\n"), "auto".into(), to).await?;
+    Ok(serde_json::json!({
+        "translated": [merged_text],
+        "merged": true,
+    }))
 }
 
 /// In-memory clipboard history (per app session).

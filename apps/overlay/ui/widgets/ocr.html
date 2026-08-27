@@ -34,13 +34,12 @@ canvas { max-width: 100%; max-height: 100%; cursor: crosshair; }
     <span class="status" id="status"></span>
   </div>
   <div class="canvas-wrap" id="canvas-wrap">
-    <div class="placeholder" id="placeholder">点击「截取屏幕」开始<br>截取后可在图片上拖拽框选区域识别文字</div>
+    <div class="placeholder" id="placeholder">点「截取屏幕」，我来帮你认字～<br>截好图后，在图片上拖拽框选想识别的区域</div>
     <canvas id="canvas" style="display:none"></canvas>
   </div>
   <div class="result-box" id="result-text" style="display:none"></div>
   <div class="result-actions" id="result-actions" style="display:none">
     <button class="btn btn-sm" id="copy-btn">复制</button>
-    <button class="btn btn-sm" id="translate-btn">翻译</button>
     <button class="btn btn-sm" id="search-btn">搜索</button>
   </div>
   <div class="history-label" id="history-label" style="display:none">最近识别：</div>
@@ -64,7 +63,6 @@ const el = {
   resultText: document.getElementById("result-text"),
   resultActions: document.getElementById("result-actions"),
   copyBtn: document.getElementById("copy-btn"),
-  translateBtn: document.getElementById("translate-btn"),
   searchBtn: document.getElementById("search-btn"),
   history: document.getElementById("history"),
   historyLabel: document.getElementById("history-label"),
@@ -200,16 +198,6 @@ el.copyBtn.onclick = async () => {
     await writeClipboard(el.resultText.textContent);
     setStatus("已复制到剪贴板", "ok");
   } catch { setStatus("复制失败", "err"); }
-};
-el.translateBtn.onclick = async () => {
-  const text = el.resultText.textContent;
-  if (!text) return;
-  setStatus("正在翻译...");
-  try {
-    const result = await invoke("widget_translate", { text, from: "auto", to: "zh" });
-    el.resultText.textContent = result.translated;
-    setStatus("已翻译", "ok");
-  } catch(e) { setStatus("翻译失败: " + String(e), "err"); }
 };
 el.searchBtn.onclick = () => {
   const text = el.resultText.textContent.trim();

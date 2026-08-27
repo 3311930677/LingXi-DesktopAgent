@@ -22,6 +22,7 @@ lingxi-agent = { path = "../../crates/lingxi-agent" }
 lingxi-tools = { path = "../../crates/tools" }
 lingxi-tools-windows = { path = "../../crates/tools-windows" }
 tokio = { version = "1", features = ["rt-multi-thread", "time"] }
+base64 = "0.22"
 uuid = { version = "1", features = ["v4"] }
 futures = "0.3"
 windows = { version = "0.58", features = [

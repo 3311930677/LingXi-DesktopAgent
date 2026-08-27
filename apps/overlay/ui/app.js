@@ -518,7 +518,7 @@ async function pollSelection() {
       if (state.source.trim()) {
         await refreshPreview();
       } else {
-        renderPreviewState("empty", "还没有读取到选中文本", "请在目标应用中选中文字，然后按 Ctrl+Alt+Space。");
+        renderPreviewState("empty", "我还没看到你选中的文字", "在任意应用里选中一段文字，再按 Ctrl+Alt+Space 召唤我～");
       }
     }
   } catch {
@@ -621,6 +621,13 @@ let petSkinsCache = [];
 
 function renderSkinGrid(skins, activeId) {
   el.skinGrid.replaceChildren();
+  if (!skins.length) {
+    const hint = document.createElement("div");
+    hint.className = "skin-empty";
+    hint.textContent = "暂时没有找到皮肤包～把皮肤文件夹放进 assets/skins/ 再来看看吧";
+    el.skinGrid.appendChild(hint);
+    return;
+  }
   for (const skin of skins) {
     const card = document.createElement("button");
     card.type = "button";
@@ -660,7 +667,11 @@ function fillPetSettings(view) {
 }
 
 async function loadPetSettings() {
-  if (!invoke) return;
+  if (!invoke) {
+    // 浏览器预览没有皮肤数据，至少把空态占位画出来，避免区域塌陷。
+    renderSkinGrid([], "");
+    return;
+  }
   try {
     const [skins, view] = await Promise.all([
       invoke("list_pet_skins"),
@@ -902,7 +913,7 @@ async function sendChatMessage() {
   // Show a thinking indicator
   const thinking = document.createElement("div");
   thinking.className = "chat-bubble chat-assistant chat-thinking";
-  thinking.textContent = "思考中…";
+  thinking.textContent = "让我想想…";
   el.chatMessages.appendChild(thinking);
   el.chatMessages.scrollTop = el.chatMessages.scrollHeight;
   el.chatSend.disabled = true;
@@ -1053,7 +1064,7 @@ async function loadTools() {
 
 function renderTools(tools) {
   toolsCache = tools;
-  el.toolsCount.textContent = tools.length;
+  el.toolsCount.hidden = tools.length === 0;
   applyToolsFilter();
 }
 
@@ -1067,8 +1078,9 @@ function applyToolsFilter() {
   });
 
   el.toolsGrid.replaceChildren();
+  el.toolsCount.textContent = filtered.length;
   if (!filtered.length) {
-    el.toolsEmpty.textContent = toolsCache.length ? "没有找到匹配的工具" : "没有已注册的工具";
+    el.toolsEmpty.textContent = toolsCache.length ? "没找到匹配的工具，换个词试试？" : "还没有已注册的工具～";
     el.toolsEmpty.hidden = false;
     return;
   }

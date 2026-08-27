@@ -61,7 +61,7 @@
     <span class="status" id="status"></span>
   </div>
   <div class="clip-list" id="clip-list">
-    <div class="placeholder">暂无剪贴板记录<br>复制文字后会自动出现在这里</div>
+    <div class="placeholder">还没存下什么东西呢～<br>复制一段文字，它就会自动出现在这里</div>
   </div>
 </div>
 <script src="widget.js"></script>
@@ -90,7 +90,7 @@ function renderClipboard() {
   const filtered = q ? clipCache.filter(c => c.text.toLowerCase().includes(q)) : clipCache;
   el.clipList.innerHTML = "";
   if (filtered.length === 0) {
-    el.clipList.innerHTML = '<div class="placeholder">' + (q ? "没有匹配的记录" : "暂无剪贴板记录<br>复制文字后会自动出现在这里") + '</div>';
+    el.clipList.innerHTML = '<div class="placeholder">' + (q ? "没找到匹配的记录，换个词试试？" : "还没存下什么东西呢～<br>复制一段文字，它就会自动出现在这里") + '</div>';
     return;
   }
   filtered.forEach((item) => {

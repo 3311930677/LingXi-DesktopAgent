@@ -20,14 +20,14 @@ body { padding: 7px; }
   width: 100%;
   height: 78px;
   overflow: hidden;
-  border: 1px solid rgba(148, 174, 255, 0.24);
+  border: 1px solid rgba(255, 196, 130, 0.22);
   border-radius: 16px;
   background:
-    radial-gradient(140% 180% at 0% 0%, rgba(75, 112, 220, 0.22), transparent 52%),
-    linear-gradient(145deg, rgba(27, 30, 46, 0.98), rgba(17, 19, 30, 0.98));
+    radial-gradient(140% 180% at 0% 0%, rgba(240, 165, 92, 0.2), transparent 52%),
+    linear-gradient(145deg, rgba(38, 28, 22, 0.98), rgba(24, 17, 14, 0.98));
   box-shadow:
     0 14px 34px rgba(0, 0, 0, 0.42),
-    inset 0 1px rgba(255, 255, 255, 0.06);
+    inset 0 1px rgba(255, 230, 200, 0.06);
   backdrop-filter: blur(22px) saturate(145%);
   animation: panel-in 140ms ease-out;
 }
@@ -37,8 +37,8 @@ body { padding: 7px; }
   position: absolute;
   inset: 0 auto 0 0;
   width: 3px;
-  background: linear-gradient(#85e5ff, #8175ff);
-  box-shadow: 0 0 16px rgba(111, 181, 255, 0.65);
+  background: linear-gradient(#ffd9a0, #ef8d6e);
+  box-shadow: 0 0 16px rgba(240, 165, 92, 0.6);
 }
 
 .topline {
@@ -62,14 +62,14 @@ body { padding: 7px; }
   display: grid;
   place-items: center;
   border-radius: 7px;
-  color: #111522;
-  background: linear-gradient(145deg, #96ecff, #9c9cff);
+  color: #2a180b;
+  background: linear-gradient(145deg, #ffd9a0, #ef8d6e);
   font: 800 12px/1 "Segoe UI", sans-serif;
-  box-shadow: 0 3px 12px rgba(105, 184, 255, 0.27);
+  box-shadow: 0 3px 12px rgba(240, 165, 92, 0.3);
 }
 
 .brand-name {
-  color: rgba(210, 219, 255, 0.62);
+  color: rgba(255, 224, 196, 0.62);
   font: 700 9px/1 "Segoe UI", sans-serif;
   letter-spacing: 1.4px;
 }
@@ -80,7 +80,7 @@ body { padding: 7px; }
   display: flex;
   align-items: center;
   overflow: hidden;
-  color: #c8d5ff;
+  color: #ffdcb8;
   font: 600 14px/1 "Cascadia Code", "Consolas", monospace;
   letter-spacing: 0.35px;
 }
@@ -95,7 +95,7 @@ body { padding: 7px; }
   width: 1px;
   height: 15px;
   margin-left: 2px;
-  background: #82dcff;
+  background: #f0a55c;
   animation: blink 1s steps(1) infinite;
 }
 
@@ -105,10 +105,10 @@ body { padding: 7px; }
   align-items: center;
   gap: 5px;
   padding: 3px 8px;
-  border: 1px solid rgba(128, 206, 255, 0.15);
+  border: 1px solid rgba(255, 196, 130, 0.16);
   border-radius: 999px;
-  color: rgba(220, 231, 255, 0.68);
-  background: rgba(100, 147, 235, 0.09);
+  color: rgba(255, 232, 210, 0.68);
+  background: rgba(240, 165, 92, 0.09);
   font-size: 10px;
 }
 
@@ -160,27 +160,27 @@ body { padding: 7px; }
   padding: 0 9px;
   border: 1px solid transparent;
   border-radius: 9px;
-  color: rgba(235, 239, 255, 0.84);
-  background: rgba(255, 255, 255, 0.045);
+  color: rgba(255, 240, 225, 0.84);
+  background: rgba(255, 240, 222, 0.045);
   cursor: pointer;
   transition: transform 110ms ease, background 110ms ease, border-color 110ms ease;
 }
 
 .candidate:first-child {
   color: #fff;
-  border-color: rgba(131, 199, 255, 0.30);
-  background: linear-gradient(135deg, rgba(74, 126, 255, 0.35), rgba(117, 91, 229, 0.29));
-  box-shadow: 0 4px 13px rgba(58, 92, 196, 0.18);
+  border-color: rgba(255, 196, 130, 0.32);
+  background: linear-gradient(135deg, rgba(240, 165, 92, 0.34), rgba(239, 141, 110, 0.27));
+  box-shadow: 0 4px 13px rgba(240, 140, 92, 0.2);
 }
 
 .candidate:hover {
   transform: translateY(-1px);
-  border-color: rgba(139, 211, 255, 0.32);
-  background: rgba(109, 145, 245, 0.16);
+  border-color: rgba(255, 196, 130, 0.36);
+  background: rgba(240, 165, 92, 0.16);
 }
 
 .candidate .idx {
-  color: #85ddff;
+  color: #ffd9a0;
   font: 800 9px/1 "Segoe UI", sans-serif;
 }
 
@@ -192,7 +192,7 @@ body { padding: 7px; }
 
 .hint {
   flex: 0 0 auto;
-  color: rgba(194, 203, 231, 0.36);
+  color: rgba(230, 205, 180, 0.36);
   font-size: 9px;
   white-space: nowrap;
 }

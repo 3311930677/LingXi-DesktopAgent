@@ -99,6 +99,58 @@ pub fn translate_with_config(
     translate_blocking(api_key, base_url, model, text, from, to)
 }
 
+/// One-shot chat completion with a custom system/user prompt. Callers that
+/// need a structured prompt (e.g. batch line translation for the overlay
+/// full-screen translate widget) use this instead of `translate_with_config`.
+pub fn chat_completion(
+    api_key: &str,
+    base_url: &str,
+    model: &str,
+    system: &str,
+    user: &str,
+) -> Result<String, String> {
+    let tls = native_tls::TlsConnector::new().map_err(|e| format!("TLS 初始化失败: {e}"))?;
+    let agent = ureq::AgentBuilder::new()
+        .tls_connector(std::sync::Arc::new(tls))
+        .timeout(TIMEOUT)
+        .build();
+
+    let endpoint = chat_completions_url(base_url);
+    let payload = json!({
+        "model": model,
+        "messages": [
+            { "role": "system", "content": system },
+            { "role": "user", "content": user }
+        ],
+        "temperature": 0.1,
+        "stream": false
+    });
+
+    let response = agent
+        .post(&endpoint)
+        .set("Authorization", &format!("Bearer {api_key}"))
+        .set("Content-Type", "application/json")
+        .send_json(payload)
+        .map_err(|e| match e {
+            ureq::Error::Status(code, resp) => {
+                let body = resp.into_string().unwrap_or_default();
+                let body: String = body.chars().take(300).collect();
+                format!("HTTP {code}: {body}")
+            }
+            other => format!("请求失败: {other}"),
+        })?;
+
+    let body: serde_json::Value = response
+        .into_json()
+        .map_err(|e| format!("解析响应失败: {e}"))?;
+
+    body["choices"][0]["message"]["content"]
+        .as_str()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "模型返回了空结果".to_string())
+}
+
 /// Normalize an endpoint base (or full URL) into a chat-completions URL.
 /// Mirrors the overlay cloud backend: accepts `https://host`,
 /// `https://host/v1` and `https://host/v1/chat/completions`.

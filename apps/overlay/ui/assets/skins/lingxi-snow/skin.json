@@ -1,0 +1,13 @@
+{
+  "id": "lingxi-snow",
+  "name": "小雪团",
+  "author": "LingXi",
+  "version": "1.0.0",
+  "description": "围着冰蓝围巾的小雪熊：毛茸茸凉丝丝，耳朵会自己抖。",
+  "states": {
+    "idle": { "image": "idle.svg", "bubble": "呼…" },
+    "thinking": { "image": "thinking.svg", "bubble": "想想…" },
+    "speaking": { "image": "speaking.svg", "bubble": "说好了！" },
+    "alert": { "image": "alert.svg", "bubble": "有新消息！" }
+  }
+}

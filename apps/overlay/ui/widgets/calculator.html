@@ -109,11 +109,22 @@ async function calculate() {
   el.result.textContent = "计算中...";
   el.result.className = "result-display pending";
   try {
-    const res = await invoke("widget_calculate", { expression: expr });
-    el.result.textContent = "= " + res.result;
+    let text;
+    if (invoke) {
+      const res = await invoke("widget_calculate", { expression: expr });
+      text = res.result;
+    } else {
+      // 浏览器预览无后端：只做白名单内的纯四则运算兜底，
+      // 避免把原始报错直接展示给用户。
+      if (!/^[-+*/%().\d\s]+$/.test(expr)) throw new Error("这个式子我还看不懂～");
+      const v = Function('"use strict"; return (' + expr + ');')();
+      if (typeof v !== "number" || !isFinite(v)) throw new Error("结果算不出来呀");
+      text = String(Math.round(v * 1e10) / 1e10);
+    }
+    el.result.textContent = "= " + text;
     el.result.className = "result-display";
   } catch(e) {
-    el.result.textContent = String(e);
+    el.result.textContent = e && e.message ? e.message : "计算失败，换个式子试试？";
     el.result.className = "result-display error";
   }
 }

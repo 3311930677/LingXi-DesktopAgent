@@ -6,6 +6,7 @@ const listen = TAURI && TAURI.event ? TAURI.event.listen : null;
 const pet = document.getElementById("pet");
 const avatar = document.getElementById("pet-avatar");
 const bubble = document.getElementById("bubble");
+const fxLayer = document.getElementById("fx");
 const skinMenu = document.getElementById("skin-menu");
 
 // 浏览器预览回落：Tauri 后端不可用时仍能显示默认皮肤。
@@ -23,13 +24,18 @@ let config = FALLBACK;
 let currentSkinId = "lingxi-hamster";
 let status = "idle";
 let down = null;
+let clickTimer = 0;
 
 function render(next) {
   status = next || "idle";
-  pet.className = "pet " + status;
+  // 只切状态类，保留 dragging/dropped/antic 等临时动画类。
+  for (const s of ["idle", "thinking", "speaking", "alert"]) {
+    pet.classList.toggle(s, s === status);
+  }
   const nextAvatar = config.images[status] || FALLBACK.images.idle;
   if (!avatar.src.endsWith(nextAvatar)) avatar.src = nextAvatar;
-  bubble.textContent = config.bubbles[status] || FALLBACK.bubbles.idle;
+  // 互动反应气泡优先：临时台词没说完前不被状态轮询覆盖。
+  if (!sayActive) bubble.textContent = config.bubbles[status] || FALLBACK.bubbles.idle;
 }
 
 function applyConfig(view) {
@@ -109,31 +115,144 @@ window.addEventListener("keydown", (event) => {
 });
 
 // ---- 单击 / 拖动 ----
+// 拖动带物理感：抓起时轻微倾斜缩放，松手时 squash & stretch 弹跳。
 
 pet.addEventListener("mousedown", (event) => {
   if (event.button !== 0) return;
   down = { x: event.screenX, y: event.screenY };
+  pet.classList.add("dragging");
+  pet.classList.remove("dropped");
 });
 
 pet.addEventListener("mouseup", async (event) => {
-  if (!down || !invoke) return;
+  if (!down) return;
   const moved = Math.hypot(event.screenX - down.x, event.screenY - down.y) > 5;
   down = null;
-  if (moved) return;
-  try {
-    await invoke("toggle_panel");
-    if (status === "alert") await invoke("set_pet_status", { status: "idle" });
-  } catch {
-    render("idle");
+  pet.classList.remove("dragging");
+  if (moved) {
+    pet.classList.add("dropped");
+    setTimeout(() => pet.classList.remove("dropped"), 620);
+    return;
+  }
+  // 短延迟区分单击/双击：双击先不打开面板，改成逗它一下。
+  if (clickTimer) {
+    clearTimeout(clickTimer);
+    clickTimer = 0;
+    pokeReact();
+    return;
+  }
+  clickTimer = setTimeout(async () => {
+    clickTimer = 0;
+    if (!invoke) return;
+    try {
+      await invoke("toggle_panel");
+      if (status === "alert") await invoke("set_pet_status", { status: "idle" });
+    } catch {
+      render("idle");
+    }
+  }, 240);
+});
+
+// 鼠标在窗口外松开时也要复位拖拽态。
+window.addEventListener("mouseup", () => {
+  if (down) {
+    down = null;
+    pet.classList.remove("dragging");
   }
 });
 
+// ---- idle 彩蛋：偶尔左右张望，让形象更“活” ----
+let anticTimer = 0;
+function scheduleAntic() {
+  clearTimeout(anticTimer);
+  anticTimer = setTimeout(() => {
+    if (status === "idle" && !down) {
+      pet.classList.add("antic");
+      setTimeout(() => pet.classList.remove("antic"), 1700);
+    }
+    scheduleAntic();
+  }, 9000 + Math.random() * 15000);
+}
+scheduleAntic();
+
 pet.addEventListener("mousemove", (event) => {
-  if (!down || !invoke || event.buttons !== 1) return;
-  if (Math.hypot(event.screenX - down.x, event.screenY - down.y) > 5) {
-    invoke("start_window_drag").catch(() => {});
+  if (down && invoke && event.buttons === 1) {
+    if (Math.hypot(event.screenX - down.x, event.screenY - down.y) > 5) {
+      invoke("start_window_drag").catch(() => {});
+    }
+  }
+  // 摸摸头：不按按键在它身上滑来滑去，滑够了就开心一下。
+  if (!down && !event.buttons) {
+    petDist += Math.hypot(event.movementX || 0, event.movementY || 0);
+    if (petDist > 170 && Date.now() > petCooldown) {
+      petDist = 0;
+      petCooldown = Date.now() + 2600;
+      petted();
+    }
   }
 });
+
+// ---- 互动：摸摸头 / 双击逗玩 ----
+
+const PET_LINES = {
+  "lingxi-nailong": ["嘿嘿，再摸摸～", "呼噜噜…", "翅膀不许拉！", "好舒服呀"],
+  "lingxi-snow": ["凉凉的，多摸一会儿～", "围巾都摸乱啦", "耳朵会抖哦", "嘿嘿…"],
+  "lingxi-hamster": ["吱！别摸啦", "再摸要打滚了", "嘿嘿…"],
+  "lingxi-cat": ["喵～下巴这边", "呼噜噜…", "尾巴不许碰！"],
+};
+const PET_FALLBACK_LINES = ["嘿嘿，好痒～", "再摸摸我嘛", "(*´▽`*)"];
+const POKE_LINES = ["哇！蹦起来了", "转圈圈～", "被你逮到啦", "嘿咻！"];
+
+let petDist = 0;
+let petCooldown = 0;
+let sayTimer = 0;
+let sayActive = false;
+
+function pick(list) {
+  return list[Math.floor(Math.random() * list.length)];
+}
+
+// 临时说一句，几秒后回到当前状态的气泡。
+function sayTemp(text, ms) {
+  clearTimeout(sayTimer);
+  sayActive = true;
+  bubble.textContent = text;
+  sayTimer = setTimeout(() => {
+    sayActive = false;
+    bubble.textContent = config.bubbles[status] || FALLBACK.bubbles.idle;
+  }, ms || 2200);
+}
+
+function spawnFx(glyph, count) {
+  for (let i = 0; i < count; i++) {
+    const s = document.createElement("span");
+    s.className = "fx";
+    s.textContent = glyph;
+    s.style.left = 40 + Math.floor(Math.random() * 120) + "px";
+    s.style.top = 55 + Math.floor(Math.random() * 60) + "px";
+    s.style.animationDelay = (Math.random() * 0.3).toFixed(2) + "s";
+    s.style.setProperty("--fx-rot", Math.floor(Math.random() * 50 - 25) + "deg");
+    fxLayer.appendChild(s);
+    setTimeout(() => s.remove(), 1700);
+  }
+}
+
+function petted() {
+  pet.classList.add("happy");
+  setTimeout(() => pet.classList.remove("happy"), 1100);
+  spawnFx("❤", 4);
+  const lines = PET_LINES[currentSkinId] || PET_FALLBACK_LINES;
+  sayTemp(pick(lines));
+}
+
+function pokeReact() {
+  pet.classList.remove("jump");
+  void pet.offsetWidth;
+  pet.classList.add("jump");
+  setTimeout(() => pet.classList.remove("jump"), 950);
+  spawnFx("✦", 5);
+  sayTemp(pick(POKE_LINES));
+}
 
 async function poll() {
   if (!invoke) return;
