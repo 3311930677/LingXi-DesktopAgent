@@ -3,7 +3,7 @@
 use std::sync::atomic::Ordering;
 use std::thread;
 use std::time::Duration;
-use tauri::{AppHandle, Manager, State, WebviewWindow};
+use tauri::{AppHandle, Manager, PhysicalPosition, State, WebviewWindow};
 use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture;
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -170,6 +170,24 @@ pub(crate) fn start_window_drag(window: WebviewWindow, state: State<AppState>) -
         state.user_positioned.store(true, Ordering::Relaxed);
     }
     window.start_dragging().map_err(|error| error.to_string())
+}
+
+/// Move the pet window by a screen-space delta. Manual dragging keeps every
+/// mouse event inside the WebView (`start_dragging` hands the mouse to the OS
+/// modal drag loop, which swallows further JS events on non-activating
+/// windows), so the front end drives position updates frame by frame instead.
+#[tauri::command]
+pub(crate) fn move_pet_by(window: WebviewWindow, dx: i32, dy: i32) -> Result<(), String> {
+    if window.label() != "pet" {
+        return Err("move_pet_by 仅限桌宠窗口".to_string());
+    }
+    if dx == 0 && dy == 0 {
+        return Ok(());
+    }
+    let pos = window.outer_position().map_err(|error| error.to_string())?;
+    window
+        .set_position(PhysicalPosition::new(pos.x + dx, pos.y + dy))
+        .map_err(|error| error.to_string())
 }
 
 /// Begin native south-east resize dragging from the visible corner grip. A

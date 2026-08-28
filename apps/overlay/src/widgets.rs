@@ -369,7 +369,8 @@ fn run_winrt_ocr(png_path: &std::path::Path) -> Result<Vec<OcrLine>, String> {
 
     let mut lines = Vec::with_capacity(items.len());
     for item in items {
-        let text = item.get("text").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+        let raw = item.get("text").and_then(|v| v.as_str()).unwrap_or("").trim();
+        let text = normalize_ocr_text(raw);
         if text.is_empty() {
             continue;
         }
@@ -377,6 +378,35 @@ fn run_winrt_ocr(png_path: &std::path::Path) -> Result<Vec<OcrLine>, String> {
         lines.push(OcrLine { text, x: num("x"), y: num("y"), w: num("w"), h: num("h") });
     }
     Ok(lines)
+}
+
+/// WinRT OCR 在中文字符之间插入假空格（"编 辑" 实为 "编辑"）。删除两侧
+/// 至少有一侧是 CJK 字符的空白；英文单词之间的空格保持原样。
+fn normalize_ocr_text(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len());
+    for (i, &ch) in chars.iter().enumerate() {
+        if ch.is_whitespace() && i > 0 && i + 1 < chars.len() {
+            if is_cjk_char(chars[i - 1]) || is_cjk_char(chars[i + 1]) {
+                continue;
+            }
+        }
+        out.push(ch);
+    }
+    out
+}
+
+/// CJK 统一表意文字、扩展 A、兼容表意文字、CJK 标点、全角形式、
+/// 假名与谚文 —— WinRT OCR 会在这些字符两侧掺入多余空格。
+fn is_cjk_char(c: char) -> bool {
+    let v = c as u32;
+    (0x4E00..=0x9FFF).contains(&v)
+        || (0x3400..=0x4DBF).contains(&v)
+        || (0xF900..=0xFAFF).contains(&v)
+        || (0x3000..=0x303F).contains(&v)
+        || (0xFF00..=0xFFEF).contains(&v)
+        || (0x3040..=0x30FF).contains(&v)
+        || (0xAC00..=0xD7AF).contains(&v)
 }
 
 /// Capture a screen region and run OCR on it.
@@ -433,8 +463,8 @@ pub(crate) async fn widget_ocr(x: i32, y: i32, w: i32, h: i32) -> Result<serde_j
 /// Capture the full screen and OCR it, returning the screenshot plus every
 /// recognized line with its bounding box. Used by the full-screen translate
 /// widget to overlay translations at their original positions (有道拍照
-/// 翻译-style). The translate widget window is hidden first so it does not
-/// cover the content being captured.
+/// 翻译-style). Every visible LingXi window (main panel, pet, widgets) is
+/// hidden first so the capture only contains user content.
 #[tauri::command]
 pub(crate) async fn widget_ocr_fullscreen(
     app: AppHandle,
@@ -443,11 +473,18 @@ pub(crate) async fn widget_ocr_fullscreen(
     {
         use base64::Engine as _;
 
-        let window = app.get_webview_window("widget-translate");
-        if let Some(w) = window.as_ref() {
+        // Hide every visible webview window, not just widget-translate —
+        // the main panel and pet used to get baked into the screenshot and
+        // OCR'd as garbage lines that polluted the translation output.
+        let shown: Vec<_> = app
+            .webview_windows()
+            .into_values()
+            .filter(|w| w.is_visible().unwrap_or(false))
+            .collect();
+        for w in &shown {
             let _ = w.hide();
         }
-        // Give the compositor a moment to actually take the window off screen.
+        // Give the compositor a moment to actually take the windows off screen.
         std::thread::sleep(Duration::from_millis(250));
 
         let result = tauri::async_runtime::spawn_blocking(|| {
@@ -475,8 +512,10 @@ pub(crate) async fn widget_ocr_fullscreen(
         .await
         .map_err(|e| format!("截图识别任务失败: {e}"))?;
 
-        if let Some(w) = window.as_ref() {
+        for w in &shown {
             let _ = w.show();
+        }
+        if let Some(w) = app.get_webview_window("widget-translate") {
             let _ = w.set_focus();
         }
         tokio::time::timeout(Duration::from_secs(30), async move { result })
@@ -1098,4 +1137,54 @@ fn chrono_like_now() -> String {
     }
     #[cfg(not(windows))]
     String::new()
+}
+
+/// Decode a `data:image/png;base64,...` data URL and write the PNG bytes to
+/// Pictures/灵犀截图. WebView2 blocks in-page downloads (`a[download]`), so
+/// widget pages save screenshots through this command instead. Duplicate
+/// names get a _1/_2 suffix rather than overwriting.
+#[tauri::command]
+pub(crate) async fn widget_save_image(
+    data_url: String,
+    name: String,
+) -> Result<serde_json::Value, String> {
+    use base64::Engine as _;
+
+    let b64 = data_url
+        .split_once("base64,")
+        .map(|(_, rest)| rest)
+        .unwrap_or(data_url.as_str());
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(b64.trim())
+        .map_err(|e| format!("解码图片数据失败: {e}"))?;
+    if bytes.is_empty() {
+        return Err("图片数据为空".to_string());
+    }
+
+    let cleaned: String = name
+        .chars()
+        .filter(|c| !c.is_control())
+        .map(|c| if matches!(c, '\\' | '/' | ':' | '*' | '?' | '"' | '<' | '>' | '|') { '_' } else { c })
+        .collect();
+    let stem = cleaned.trim();
+    let stem = stem.strip_suffix(".png").unwrap_or(stem);
+    let stem = if stem.is_empty() { "lingxi-screenshot" } else { stem };
+
+    let dir = dirs::picture_dir()
+        .unwrap_or_else(std::env::temp_dir)
+        .join("灵犀截图");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("创建目录失败: {e}"))?;
+
+    let mut path = dir.join(format!("{stem}.png"));
+    let mut n = 1u32;
+    while path.exists() {
+        path = dir.join(format!("{stem}_{n}.png"));
+        n += 1;
+    }
+    std::fs::write(&path, &bytes).map_err(|e| format!("写入文件失败: {e}"))?;
+
+    Ok(serde_json::json!({
+        "path": path.to_string_lossy(),
+        "bytes": bytes.len(),
+    }))
 }

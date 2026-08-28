@@ -52,10 +52,10 @@
 .key.eq {
   background: var(--brand-dim);
   color: var(--brand-hi);
-  border-color: rgba(224, 178, 104, 0.35);
+  border-color: rgba(76, 194, 255, 0.35);
   font-weight: 600;
 }
-.key.eq:hover { background: rgba(224, 178, 104, 0.2); border-color: var(--brand); }
+.key.eq:hover { background: rgba(76, 194, 255, 0.2); border-color: var(--brand); }
 .key.fn { color: var(--warn); font-size: 12.5px; }
 </style>
 </head>
@@ -116,15 +116,15 @@ async function calculate() {
     } else {
       // 浏览器预览无后端：只做白名单内的纯四则运算兜底，
       // 避免把原始报错直接展示给用户。
-      if (!/^[-+*/%().\d\s]+$/.test(expr)) throw new Error("这个式子我还看不懂～");
+      if (!/^[-+*/%().\d\s]+$/.test(expr)) throw new Error("无法解析该表达式");
       const v = Function('"use strict"; return (' + expr + ');')();
-      if (typeof v !== "number" || !isFinite(v)) throw new Error("结果算不出来呀");
+      if (typeof v !== "number" || !isFinite(v)) throw new Error("无法计算结果");
       text = String(Math.round(v * 1e10) / 1e10);
     }
     el.result.textContent = "= " + text;
     el.result.className = "result-display";
   } catch(e) {
-    el.result.textContent = e && e.message ? e.message : "计算失败，换个式子试试？";
+    el.result.textContent = e && e.message ? e.message : "计算失败";
     el.result.className = "result-display error";
   }
 }

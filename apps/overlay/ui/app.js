@@ -118,6 +118,7 @@ const el = {
   status: document.getElementById("status"),
   applyBtn: document.getElementById("apply-btn"),
   undoBtn: document.getElementById("undo-btn"),
+  recaptureBtn: document.getElementById("recapture-btn"),
   closeBtn: document.getElementById("close-btn"),
   pinBtn: document.getElementById("pin-btn"),
   rewriteTab: document.getElementById("rewrite-tab"),
@@ -177,6 +178,16 @@ const el = {
   toolsEmpty: document.getElementById("tools-empty"),
   // Widgets
   widgetsGrid: document.getElementById("widgets-grid"),
+  // Market
+  marketView: document.getElementById("market-view"),
+  marketGrid: document.getElementById("market-grid"),
+  marketEmpty: document.getElementById("market-empty"),
+  skinsEmpty: document.getElementById("skins-empty"),
+  marketError: document.getElementById("market-error"),
+  marketBack: document.getElementById("market-back"),
+  marketRefresh: document.getElementById("market-refresh"),
+  marketTabs: document.getElementById("market-tabs"),
+  marketBanner: document.getElementById("tools-market-btn"),
 };
 
 let qqMessage = "";
@@ -185,6 +196,12 @@ let agentHistoryLoaded = false;
 let toolsCache = [];
 let toolsSearchQuery = "";
 let toolsActiveCat = "all";
+let marketCache = [];
+let installedCache = [];
+let currentSkinId = "";
+let marketTab = "plugins";
+let marketBusyId = "";
+let toolPluginsCache = [];
 
 // Browser-only examples for visual preview. Real transformations always come
 // from the selected local/cloud model through Tauri.
@@ -518,11 +535,31 @@ async function pollSelection() {
       if (state.source.trim()) {
         await refreshPreview();
       } else {
-        renderPreviewState("empty", "我还没看到你选中的文字", "在任意应用里选中一段文字，再按 Ctrl+Alt+Space 召唤我～");
+        renderPreviewState("empty", "未读取到选中的文字", "在任意应用里选中一段文字，再按 Ctrl+Alt+Space 打开面板");
       }
     }
   } catch {
     renderPreviewState("error", "无法读取当前选区", "请关闭浮窗后重新选择文字并按快捷键。");
+  }
+}
+
+// Manual button: grab the current selection without the hotkey. Safe while the
+// panel is visible — the rewrite view keeps it non-activating, so the selection
+// focus stays in the source app; pollSelection picks up the new revision.
+async function recaptureSelection() {
+  if (!invoke) return;
+  el.recaptureBtn.disabled = true;
+  try {
+    const ok = await invoke("trigger_transform");
+    if (ok) {
+      showStatus("已抓取选中文字，正在生成预览…", "ok");
+    } else {
+      showStatus("没抓到选区，请先在别的应用里选中一段文字", "warn");
+    }
+  } catch (e) {
+    showStatus("读取选区失败: " + e, "err");
+  } finally {
+    el.recaptureBtn.disabled = false;
   }
 }
 
@@ -537,10 +574,11 @@ function showView(view) {
   el.settingsPanel.hidden = view !== "settings";
   el.agentView.hidden = view !== "agent";
   el.toolsView.hidden = view !== "tools";
+  el.marketView.hidden = view !== "market";
   el.modes.hidden = !rewrite;
   const tabs = [el.rewriteTab, el.qqTab, el.agentTab, el.toolsTab, el.settingsBtn];
   for (const tab of tabs) tab.classList.remove("is-active");
-  const map = { rewrite: el.rewriteTab, qq: el.qqTab, agent: el.agentTab, tools: el.toolsTab, settings: el.settingsBtn };
+  const map = { rewrite: el.rewriteTab, qq: el.qqTab, agent: el.agentTab, tools: el.toolsTab, market: el.toolsTab, settings: el.settingsBtn };
   if (map[view]) map[view].classList.add("is-active");
   // The rewrite panel must stay non-activating so write-back's focus-drift
   // check passes; settings/QQ/agent/tools need real keyboard focus.
@@ -548,6 +586,7 @@ function showView(view) {
     invoke("set_panel_focusable", { focusable: !rewrite }).catch(() => {});
   }
   if (view === "tools") { loadWidgets(); loadTools(); }
+  if (view === "market") loadMarket();
   if (view === "agent") loadAgentHistory();
 }
 
@@ -624,7 +663,7 @@ function renderSkinGrid(skins, activeId) {
   if (!skins.length) {
     const hint = document.createElement("div");
     hint.className = "skin-empty";
-    hint.textContent = "暂时没有找到皮肤包～把皮肤文件夹放进 assets/skins/ 再来看看吧";
+    hint.textContent = "未找到皮肤包。将皮肤文件夹放入 assets/skins/ 后重新打开";
     el.skinGrid.appendChild(hint);
     return;
   }
@@ -633,10 +672,27 @@ function renderSkinGrid(skins, activeId) {
     card.type = "button";
     card.className = "skin-card" + (skin.id === activeId ? " is-active" : "");
     card.title = skin.description || skin.name;
-    const thumb = document.createElement("img");
-    thumb.src = skin.thumbnail;
-    thumb.alt = skin.name;
-    thumb.draggable = false;
+    // spritesheet 皮肤缩略图是 `<sheet>#<row>[:cols[:rows]]`，
+    // 用 div 背景取该行首列第一帧；缺省网格按 8×9 兜底。
+    const hash = skin.thumbnail ? skin.thumbnail.indexOf("#") : -1;
+    let thumb;
+    if (hash === -1) {
+      thumb = document.createElement("img");
+      thumb.src = skin.thumbnail;
+      thumb.alt = skin.name;
+      thumb.draggable = false;
+    } else {
+      const meta = skin.thumbnail.slice(hash + 1).split(":");
+      const row = parseInt(meta[0], 10) || 0;
+      const cols = parseInt(meta[1], 10) || 8;
+      const rows = parseInt(meta[2], 10) || 9;
+      thumb = document.createElement("div");
+      thumb.className = "thumb-anim";
+      thumb.style.backgroundImage = `url("${skin.thumbnail.slice(0, hash)}")`;
+      thumb.style.backgroundSize = `${cols * 100}% ${rows * 100}%`;
+      thumb.style.backgroundPosition =
+        `0% ${(rows > 1 ? (row / (rows - 1)) * 100 : 0).toFixed(2)}%`;
+    }
     const name = document.createElement("span");
     name.textContent = skin.name;
     const meta = document.createElement("small");
@@ -656,6 +712,249 @@ function renderSkinGrid(skins, activeId) {
     el.skinGrid.appendChild(card);
   }
 }
+
+// ---- 插件市场 ----
+
+async function loadMarket() {
+  if (!invoke) return;
+  el.marketRefresh.disabled = true;
+  try {
+    const [items, skins, config, tools] = await Promise.all([
+      invoke("market_list"),
+      invoke("list_pet_skins"),
+      invoke("current_pet_config"),
+      invoke("list_tool_plugins"),
+    ]);
+    marketCache = items;
+    installedCache = skins;
+    currentSkinId = config.skin.id;
+    toolPluginsCache = tools;
+    el.marketError.hidden = true;
+  } catch (e) {
+    el.marketError.textContent = "市场加载失败：" + e;
+    el.marketError.hidden = false;
+  } finally {
+    el.marketRefresh.disabled = false;
+  }
+  renderMarketView();
+}
+
+function renderMarketView() {
+  el.marketGrid.textContent = "";
+  // 同步页签激活态（含初始状态与刷新后的重渲染）
+  for (const node of el.marketTabs.children) {
+    node.classList.toggle("is-active", node.dataset.tab === marketTab);
+  }
+  // 已安装融入各自板块：renderMarketCard 按 installed_source 显示状态与操作
+  if (marketTab === "plugins") {
+    const plugins = marketCache.filter((item) => item.kind === "tool");
+    el.marketEmpty.hidden = plugins.length > 0;
+    el.skinsEmpty.hidden = true;
+    for (const item of plugins) el.marketGrid.appendChild(renderMarketCard(item));
+  } else {
+    const skins = marketCache.filter((item) => item.kind !== "tool");
+    el.marketEmpty.hidden = true;
+    el.skinsEmpty.hidden = skins.length > 0;
+    for (const item of skins) el.marketGrid.appendChild(renderMarketCard(item));
+  }
+}
+
+// 缩略图兼容两种格式：纯图片 URL，或「URL#row,cols,rows」雪碧图帧
+//（与 renderSkinGrid 的解析规则一致）。
+function applyThumbnail(thumb, thumbnail) {
+  if (!thumbnail) return;
+  const hash = thumbnail.indexOf("#");
+  if (hash === -1) {
+    thumb.style.backgroundImage = `url("${thumbnail}")`;
+    return;
+  }
+  const meta = thumbnail.slice(hash + 1).split(",").map((n) => parseInt(n, 10) || 0);
+  const row = meta[0] || 0;
+  const cols = meta[1] || 8;
+  const rows = meta[2] || 9;
+  thumb.style.backgroundImage = `url("${thumbnail.slice(0, hash)}")`;
+  thumb.style.backgroundSize = `${cols * 100}% ${rows * 100}%`;
+  thumb.style.backgroundPosition = `0% ${(rows > 1 ? (row / (rows - 1)) * 100 : 0).toFixed(2)}%`;
+}
+
+function renderMarketCard(item) {
+  const card = document.createElement("div");
+  card.className = "market-card";
+  const thumb = document.createElement("div");
+  thumb.className = "market-card-thumb";
+  applyThumbnail(thumb, item.thumbnail);
+  const name = document.createElement("span");
+  name.className = "market-card-name";
+  name.textContent = item.name;
+  const meta = document.createElement("small");
+  meta.className = "market-card-meta";
+  meta.textContent = [item.kind === "tool" ? "工具插件" : "皮肤", item.author, item.version].filter(Boolean).join(" · ");
+  const desc = document.createElement("p");
+  desc.className = "market-card-desc";
+  desc.textContent = item.description || "";
+  const foot = document.createElement("div");
+  foot.className = "market-card-foot";
+  if (item.installed_source === "builtin" || item.updatable || item.installed_source === "user") {
+    const badge = document.createElement("span");
+    badge.className = "market-state-badge" + (item.updatable ? " updatable" : "");
+    if (item.updatable) {
+      badge.textContent = "可更新";
+    } else if (item.installed_source === "builtin") {
+      badge.textContent = "内置";
+    } else {
+      badge.textContent =
+        item.kind !== "tool" && item.id === currentSkinId ? "使用中" : "已安装";
+      if (item.kind !== "tool" && item.id === currentSkinId) badge.classList.add("current");
+    }
+    foot.append(badge);
+  }
+  const btn = document.createElement("button");
+  btn.className = "market-action";
+  if (marketBusyId === item.id) {
+    btn.textContent = "下载中…";
+    btn.disabled = true;
+  } else if (item.installed_source === "builtin") {
+    btn.textContent = "已内置";
+    btn.disabled = true;
+  } else if (item.installed_source === "user" && !item.updatable) {
+    btn.textContent = "删除";
+    btn.classList.add("danger");
+    btn.addEventListener("click", () =>
+      item.kind === "tool" ? uninstallPlugin(item) : uninstallSkin(item)
+    );
+  } else {
+    btn.textContent = item.updatable ? "更新" : "安装";
+    btn.addEventListener("click", () => installSkin(item.id));
+  }
+  foot.append(btn);
+  card.append(thumb, name, meta, desc, foot);
+  return card;
+}
+
+function renderInstalledCard(skin) {
+  const card = document.createElement("div");
+  card.className = "market-card";
+  const thumb = document.createElement("div");
+  thumb.className = "market-card-thumb";
+  applyThumbnail(thumb, skin.thumbnail);
+  const name = document.createElement("span");
+  name.className = "market-card-name";
+  name.textContent = skin.name;
+  const meta = document.createElement("small");
+  meta.className = "market-card-meta";
+  meta.textContent = [skin.author, skin.version].filter(Boolean).join(" · ");
+  const foot = document.createElement("div");
+  foot.className = "market-card-foot";
+  if (skin.source !== "user") {
+    const badge = document.createElement("span");
+    badge.className = "market-state-badge";
+    badge.textContent = "内置";
+    foot.append(badge);
+  } else {
+    if (skin.id === currentSkinId) {
+      const badge = document.createElement("span");
+      badge.className = "market-state-badge current";
+      badge.textContent = "使用中";
+      foot.append(badge);
+    }
+    const del = document.createElement("button");
+    del.className = "market-action danger";
+    del.textContent = marketBusyId === skin.id ? "删除中…" : "删除";
+    del.disabled = Boolean(marketBusyId);
+    del.addEventListener("click", () => uninstallSkin(skin));
+    foot.append(del);
+  }
+  card.append(thumb, name, meta, foot);
+  return card;
+}
+
+function renderToolPluginCard(plugin) {
+  const card = document.createElement("div");
+  card.className = "market-card";
+  const thumb = document.createElement("div");
+  thumb.className = "market-card-thumb is-tool";
+  const name = document.createElement("span");
+  name.className = "market-card-name";
+  name.textContent = plugin.display_name || plugin.name;
+  const meta = document.createElement("small");
+  meta.className = "market-card-meta";
+  meta.textContent = ["工具插件", plugin.author, plugin.version].filter(Boolean).join(" · ");
+  const desc = document.createElement("p");
+  desc.className = "market-card-desc";
+  desc.textContent = plugin.description || "";
+  const foot = document.createElement("div");
+  foot.className = "market-card-foot";
+  const del = document.createElement("button");
+  del.className = "market-action danger";
+  del.textContent = marketBusyId === plugin.id ? "删除中…" : "删除";
+  del.disabled = Boolean(marketBusyId);
+  del.addEventListener("click", () => uninstallPlugin(plugin));
+  foot.append(del);
+  card.append(thumb, name, meta, desc, foot);
+  return card;
+}
+
+async function uninstallPlugin(plugin) {
+  if (!invoke || marketBusyId) return;
+  const label = plugin.display_name || plugin.name;
+  if (!confirm(`确定删除工具插件「${label}」吗？此操作不可撤销。`)) return;
+  marketBusyId = plugin.id;
+  renderMarketView();
+  try {
+    await invoke("market_uninstall", { id: plugin.id });
+    showStatus("已删除「" + label + "」", "ok");
+  } catch (e) {
+    showStatus("删除失败: " + e, "err");
+  } finally {
+    marketBusyId = "";
+    await loadMarket();
+  }
+}
+
+async function installSkin(id) {
+  if (!invoke || marketBusyId) return;
+  marketBusyId = id;
+  renderMarketView();
+  try {
+    await invoke("market_install", { id });
+    showStatus("安装完成", "ok");
+  } catch (e) {
+    showStatus("安装失败: " + e, "err");
+  } finally {
+    marketBusyId = "";
+    await loadMarket();
+  }
+}
+
+async function uninstallSkin(skin) {
+  if (!invoke || marketBusyId) return;
+  const hint = skin.id === currentSkinId ? "该皮肤正在使用中，删除后将回落到默认皮肤。" : "";
+  if (!confirm(`确定删除皮肤「${skin.name}」吗？${hint}此操作不可撤销。`)) return;
+  marketBusyId = skin.id;
+  renderMarketView();
+  try {
+    await invoke("market_uninstall", { id: skin.id });
+    showStatus("已删除「" + skin.name + "」", "ok");
+  } catch (e) {
+    showStatus("删除失败: " + e, "err");
+  } finally {
+    marketBusyId = "";
+    await loadMarket();
+  }
+}
+
+el.marketBanner.addEventListener("click", () => showView("market"));
+el.marketBack.addEventListener("click", () => showView("tools"));
+el.marketRefresh.addEventListener("click", () => loadMarket());
+el.marketTabs.addEventListener("click", (event) => {
+  const tab = event.target.closest(".market-tab");
+  if (!tab || tab.dataset.tab === marketTab) return;
+  marketTab = tab.dataset.tab;
+  for (const node of el.marketTabs.children) {
+    node.classList.toggle("is-active", node === tab);
+  }
+  renderMarketView();
+});
 
 function fillPetSettings(view) {
   renderSkinGrid(petSkinsCache, view.skin.id);
@@ -1080,7 +1379,7 @@ function applyToolsFilter() {
   el.toolsGrid.replaceChildren();
   el.toolsCount.textContent = filtered.length;
   if (!filtered.length) {
-    el.toolsEmpty.textContent = toolsCache.length ? "没找到匹配的工具，换个词试试？" : "还没有已注册的工具～";
+    el.toolsEmpty.textContent = toolsCache.length ? "未找到匹配的工具" : "暂无已注册的工具";
     el.toolsEmpty.hidden = false;
     return;
   }
@@ -1102,6 +1401,12 @@ function applyToolsFilter() {
     name.textContent = t.name;
     name.title = t.description || "";
     head.append(icon, name);
+    if (t.source === "plugin") {
+      const tag = document.createElement("span");
+      tag.className = "tool-card-plugin";
+      tag.textContent = "插件";
+      head.append(tag);
+    }
 
     const shortcut = TOOL_SHORTCUTS[t.name];
     let shortcutEl = null;
@@ -1188,6 +1493,7 @@ if (TAURI && TAURI.event && TAURI.event.listen) {
   }).catch(() => {});
 }
 el.qqRefresh.addEventListener("click", readQqMessage);
+el.recaptureBtn.addEventListener("click", recaptureSelection);
 el.qqGenerate.addEventListener("click", generateQqDraft);
 el.qqWrite.addEventListener("click", writeQqDraft);
 el.chatSend.addEventListener("click", sendChatMessage);

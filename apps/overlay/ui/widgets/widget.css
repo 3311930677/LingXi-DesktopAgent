@@ -1,23 +1,25 @@
-/* 灵犀小工具共享样式 — 与主面板「炉火」设计系统一致
-   暖棕底色 + 琥珀渐变主色 + 圆润卡片 + 柔和微动效 */
+/* 灵犀小工具共享样式 — 与主面板「墨岩」设计系统一致
+   中性深灰基底 + 单一强调色 + 语义色只标状态 */
 :root {
-  --bg: #1c1714;
-  --surface: rgba(255, 240, 222, 0.045);
-  --surface-hi: rgba(255, 240, 222, 0.085);
-  --stroke: rgba(255, 226, 194, 0.1);
-  --stroke-hi: rgba(255, 226, 194, 0.2);
-  --text: #f5efe7;
-  --text-dim: #bfb2a4;
-  --text-faint: #8f8276;
-  --brand: #f0a55c;
-  --brand-hi: #ffd9a0;
-  --brand-dim: rgba(240, 165, 92, 0.13);
-  --grad: linear-gradient(135deg, #f7b267 0%, #ef8d6e 100%);
-  --ok: #a5cf8f;
-  --warn: #e8bd77;
-  --err: #ec8c98;
-  --radius: 12px;
-  --radius-sm: 9px;
+  --bg: #202020;
+  --surface: rgba(255, 255, 255, 0.051);
+  --surface-hi: rgba(255, 255, 255, 0.093);
+  --stroke: rgba(255, 255, 255, 0.084);
+  --stroke-hi: rgba(255, 255, 255, 0.16);
+  --text: #f3f3f3;
+  --text-dim: rgba(255, 255, 255, 0.72);
+  --text-faint: rgba(255, 255, 255, 0.5);
+  --brand: #4cc2ff;
+  --brand-hi: #99dcff;
+  --brand-dim: rgba(76, 194, 255, 0.12);
+  --brand-ring: rgba(76, 194, 255, 0.18);
+  --grad: #4cc2ff;
+  --on-accent: #06212f;
+  --ok: #6ccb5f;
+  --warn: #ffd45e;
+  --err: #ff99a4;
+  --radius: 10px;
+  --radius-sm: 6px;
   --ease: cubic-bezier(0.33, 1, 0.68, 1);
 }
 
@@ -32,11 +34,7 @@ textarea {
 }
 
 body {
-  /* 暖色微光渐变底：让窗口不再是纯平色块 */
-  background:
-    radial-gradient(420px 220px at 8% -10%, rgba(247, 178, 103, 0.12), transparent 60%),
-    radial-gradient(380px 220px at 104% 112%, rgba(239, 141, 110, 0.08), transparent 60%),
-    linear-gradient(180deg, #201a16 0%, var(--bg) 18%);
+  background: var(--bg);
   color: var(--text);
   font: 13px "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", sans-serif;
   letter-spacing: 0.012em;
@@ -52,7 +50,7 @@ body {
   to { opacity: 1; transform: translateY(0); }
 }
 
-/* 标题栏：渐变爪印标记 + 温润描边 */
+/* 标题栏 */
 .widget-titlebar {
   flex: 0 0 auto;
   display: flex;
@@ -73,25 +71,19 @@ body {
   gap: 8px;
 }
 .widget-titlebar .title .icon { display: none; }
-.widget-titlebar .title::before {
-  content: "🐾";
-  font-size: 12px;
-  flex: 0 0 auto;
-  filter: saturate(0.85) opacity(0.9);
-}
 .widget-close {
   width: 24px;
   height: 24px;
   border: 0;
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-faint);
   font: 14px/1 sans-serif;
   cursor: pointer;
-  transition: background .14s, color .14s, transform .14s;
+  transition: background .14s, color .14s;
 }
-.widget-close:hover { background: rgba(236, 122, 136, 0.14); color: var(--err); transform: scale(1.06); }
-.widget-close:active { transform: scale(1); background: rgba(236, 122, 136, 0.22); }
+.widget-close:hover { background: rgba(255, 153, 164, 0.14); color: var(--err); }
+.widget-close:active { background: rgba(255, 153, 164, 0.22); }
 
 /* 主体内容区 */
 .widget-body {
@@ -114,22 +106,19 @@ body {
   font: inherit;
   font-weight: 600;
   cursor: pointer;
-  box-shadow: inset 0 1px 0 rgba(255, 230, 200, 0.04);
-  transition: background .16s, border-color .16s, opacity .16s, transform .16s, box-shadow .16s;
+  transition: background .16s, border-color .16s, opacity .16s;
 }
-.btn:hover { background: var(--surface-hi); border-color: var(--stroke-hi); transform: translateY(-1px); }
-.btn:active { transform: translateY(0) scale(0.985); }
+.btn:hover { background: var(--surface-hi); border-color: var(--stroke-hi); }
+.btn:active { transform: scale(0.985); }
 .btn:disabled { opacity: .4; cursor: not-allowed; transform: none; }
 .btn-primary {
-  background: var(--grad);
+  background: var(--brand);
   border-color: transparent;
-  color: #30190a;
-  box-shadow: 0 4px 14px rgba(240, 150, 92, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.3);
+  color: var(--on-accent);
 }
 .btn-primary:hover {
-  background: linear-gradient(135deg, #ffc27e 0%, #f79b7d 100%);
+  background: var(--brand-hi);
   border-color: transparent;
-  box-shadow: 0 6px 18px rgba(240, 150, 92, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.35);
 }
 .btn-ghost { background: transparent; }
 .btn-sm { padding: 5px 12px; font-size: 11px; }
@@ -159,8 +148,8 @@ body {
   display: inline-block;
   width: 12px;
   height: 12px;
-  border: 2px solid rgba(232, 189, 119, 0.3);
-  border-top-color: var(--warn);
+  border: 2px solid var(--brand-ring);
+  border-top-color: var(--brand);
   border-radius: 50%;
   animation: spin 0.7s linear infinite;
 }
@@ -181,12 +170,12 @@ input[type="text"], input[type="search"], textarea, select {
 input::placeholder, textarea::placeholder { color: var(--text-faint); }
 input:hover, textarea:hover, select:hover { border-color: var(--stroke-hi); }
 input:focus, textarea:focus, select:focus {
-  border-color: rgba(240, 165, 92, 0.45);
-  box-shadow: 0 0 0 3px rgba(240, 165, 92, 0.16);
+  border-color: rgba(76, 194, 255, 0.5);
+  box-shadow: 0 0 0 3px var(--brand-ring);
 }
 textarea { resize: vertical; min-height: 40px; }
 select { cursor: pointer; }
-select option { color: #1a1512; }
+select option { color: #1f1f1f; }
 
 /* 结果/内容框 */
 .result-box {
@@ -203,7 +192,7 @@ select option { color: #1a1512; }
 }
 .result-box::-webkit-scrollbar { width: 6px; }
 .result-box::-webkit-scrollbar-thumb { background: var(--stroke-hi); border-radius: 6px; }
-.result-box::-webkit-scrollbar-thumb:hover { background: rgba(240, 165, 92, 0.4); }
+.result-box::-webkit-scrollbar-thumb:hover { background: rgba(76, 194, 255, 0.5); }
 
 /* 空状态/占位 */
 .placeholder {
@@ -214,15 +203,6 @@ select option { color: #1a1512; }
   line-height: 2;
   letter-spacing: 0.01em;
 }
-.placeholder::before {
-  content: "🐾";
-  display: block;
-  font-size: 22px;
-  margin-bottom: 6px;
-  filter: saturate(0.8) opacity(0.7);
-  animation: bob 3s ease-in-out infinite;
-}
-@keyframes bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-4px); } }
 
 /* 卡片网格（用于历史/色板等） */
 .item-grid {
@@ -238,12 +218,12 @@ select option { color: #1a1512; }
   padding: 6px 11px;
   background: var(--surface);
   border: 1px solid transparent;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
   font-size: 12px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  transition: border-color .14s, background .14s, transform .14s;
+  transition: border-color .14s, background .14s;
 }
-.item-row:hover { border-color: var(--stroke-hi); background: var(--surface-hi); transform: translateX(2px); }
+.item-row:hover { border-color: var(--stroke-hi); background: var(--surface-hi); }

@@ -64,9 +64,9 @@
   height: 38%;
   background: linear-gradient(to bottom,
     transparent,
-    rgba(224, 178, 104, 0.05) 40%,
-    rgba(224, 178, 104, 0.14) 50%,
-    rgba(224, 178, 104, 0.05) 60%,
+    rgba(76, 194, 255, 0.05) 40%,
+    rgba(76, 194, 255, 0.14) 50%,
+    rgba(76, 194, 255, 0.05) 60%,
     transparent);
   animation: scan 1.7s ease-in-out infinite;
 }
@@ -178,7 +178,7 @@ details.manual .manual-body {
   </div>
 
   <div class="canvas-wrap" id="canvas-wrap">
-    <div class="placeholder" id="placeholder">点「截屏翻译」，我帮你把屏幕上的字都换种语言～<br>译文会直接贴在截图原来的位置上（类似拍照翻译）</div>
+    <div class="placeholder" id="placeholder">点击「截屏翻译」开始<br>译文会直接贴在截图原来的位置上（类似拍照翻译）</div>
     <div class="stage" id="stage" style="display:none">
       <canvas id="canvas"></canvas>
       <div class="overlay-cards" id="overlay-cards"></div>
@@ -194,6 +194,7 @@ details.manual .manual-body {
     <button class="btn btn-sm" id="view-text-btn" style="display:none">文本对照</button>
     <button class="btn btn-sm" id="view-image-btn" style="display:none">返回图片</button>
     <button class="btn btn-sm" id="copy-result-btn" style="display:none">复制译文</button>
+    <button class="btn btn-sm" id="save-img-btn" style="display:none">保存图片</button>
     <span class="status" id="status"></span>
   </div>
 
@@ -213,6 +214,9 @@ details.manual .manual-body {
 <script>
 "use strict";
 let shotImg = null;        // 截图 Image 对象
+let shotDataUrl = null;    // 原始截图 data URL（用于保存）
+let dispW = 0;             // canvas 的 CSS 像素尺寸（DPR 缩放前的逻辑尺寸）
+let dispH = 0;
 let ocrLines = [];         // OCR 行 [{text,x,y,w,h}]
 let translations = [];     // 与 ocrLines 对应的译文
 let mergedMode = false;     // 整段翻译 fallback
@@ -232,6 +236,7 @@ const el = {
   viewTextBtn: document.getElementById("view-text-btn"),
   viewImageBtn: document.getElementById("view-image-btn"),
   copyResultBtn: document.getElementById("copy-result-btn"),
+  saveImgBtn: document.getElementById("save-img-btn"),
   status: document.getElementById("status"),
   srcText: document.getElementById("src-text"),
   translateBtn: document.getElementById("translate-btn"),
@@ -244,9 +249,11 @@ async function translateScreen() {
   if (!invoke) { setStatus("需要 Tauri 环境", "err"); return; }
   el.screenBtn.disabled = true;
   el.scanline.style.display = "block";
+  el.saveImgBtn.style.display = "none";
   setStatus("正在截取屏幕...");
   try {
     const ocr = await invoke("widget_ocr_fullscreen");
+    shotDataUrl = ocr.image;
     ocrLines = ocr.lines || [];
     if (ocrLines.length === 0) {
       el.scanline.style.display = "none";
@@ -267,6 +274,7 @@ async function translateScreen() {
       el.scanline.style.display = "none";
       showImagePanel();
       renderTextPanel();
+      el.saveImgBtn.style.display = "inline-block";
       setStatus(mergedMode ? "完成（识别行数较多，已合并为整段翻译）" : "翻译完成", "ok");
     };
     img.src = ocr.image;
@@ -285,14 +293,17 @@ function fitCanvas() {
   const maxW = el.canvasWrap.clientWidth - 16;
   const maxH = el.canvasWrap.clientHeight - 16;
   const scale = Math.min(maxW / shotImg.width, maxH / shotImg.height, 1);
-  const w = Math.max(1, Math.round(shotImg.width * scale));
-  const h = Math.max(1, Math.round(shotImg.height * scale));
-  el.canvas.width = w;
-  el.canvas.height = h;
-  el.canvas.style.width = w + "px";
-  el.canvas.style.height = h + "px";
-  el.stage.style.width = w + "px";
-  el.stage.style.height = h + "px";
+  dispW = Math.max(1, Math.round(shotImg.width * scale));
+  dispH = Math.max(1, Math.round(shotImg.height * scale));
+  // 高分屏下按 DPR 渲染，否则截图预览是模糊的（内部像素不足）
+  const dpr = window.devicePixelRatio || 1;
+  el.canvas.width = dispW * dpr;
+  el.canvas.height = dispH * dpr;
+  el.canvas.style.width = dispW + "px";
+  el.canvas.style.height = dispH + "px";
+  el.stage.style.width = dispW + "px";
+  el.stage.style.height = dispH + "px";
+  el.canvas.getContext("2d").setTransform(dpr, 0, 0, dpr, 0, 0);
 }
 
 // 原位覆盖：canvas 只画轻度压暗的原图，译文用毛玻璃卡片按 OCR 坐标
@@ -302,7 +313,7 @@ function renderOverlayCards() {
   if (!shotImg) return;
   const ctx = el.canvas.getContext("2d");
   ctx.filter = "brightness(0.88) saturate(0.94)";
-  ctx.drawImage(shotImg, 0, 0, el.canvas.width, el.canvas.height);
+  ctx.drawImage(shotImg, 0, 0, dispW, dispH);
   ctx.filter = "none";
 
   el.overlayCards.replaceChildren();
@@ -313,13 +324,13 @@ function renderOverlayCards() {
     card.className = "card";
     card.textContent = text;
     const leftFrac = line.x / shotImg.width;
-    const dispH = (line.h / shotImg.height) * el.canvas.height;
-    const dispW = (line.w / shotImg.width) * el.canvas.width;
-    const room = Math.max(70, el.canvas.width * 0.94 - dispW * leftFrac);
+    const lineH = (line.h / shotImg.height) * dispH;
+    const lineW = (line.w / shotImg.width) * dispW;
+    const room = Math.max(70, dispW * 0.94 - lineW * leftFrac);
     card.style.left = (leftFrac * 100) + "%";
     card.style.top = ((line.y / shotImg.height) * 100) + "%";
-    card.style.maxWidth = Math.round(Math.min(dispW * 1.6 + 90, room)) + "px";
-    card.style.fontSize = Math.round(Math.min(Math.max(dispH * 0.72, 9), 16.5) * 10) / 10 + "px";
+    card.style.maxWidth = Math.round(Math.min(lineW * 1.6 + 90, room)) + "px";
+    card.style.fontSize = Math.round(Math.min(Math.max(lineH * 0.72, 9), 16.5) * 10) / 10 + "px";
     card.style.animationDelay = Math.min(i * 28, 900) + "ms";
     el.overlayCards.appendChild(card);
     // 文本放不下时逐级缩字号，保证单行完整
@@ -430,6 +441,21 @@ el.pasteBtn.onclick = async () => {
     el.srcText.focus();
   } catch { setStatus("无法读取剪贴板", "err"); }
 };
+
+el.saveImgBtn.onclick = async () => {
+  if (!shotDataUrl) return;
+  try {
+    const r = await invoke("widget_save_image", { dataUrl: shotDataUrl, name: shotName() });
+    setStatus("已保存：" + r.path, "ok");
+  } catch(e) {
+    setStatus("保存失败: " + String(e), "err");
+  }
+};
+
+function shotName() {
+  const d = new Date(), p = n => String(n).padStart(2, "0");
+  return `lingxi-translate-${d.getFullYear()}${p(d.getMonth()+1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+}
 
 setupWidgetClose("widget-translate");
 </script>

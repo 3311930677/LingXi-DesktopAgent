@@ -15,10 +15,10 @@
       <header class="titlebar" id="titlebar">
         <div class="brand">
           <span class="logo" aria-hidden="true">
-            <svg viewBox="0 0 24 24" width="13" height="13" fill="#3a2410"><ellipse cx="7" cy="8.2" rx="2" ry="2.7"/><ellipse cx="12" cy="6.6" rx="2" ry="2.7"/><ellipse cx="17" cy="8.2" rx="2" ry="2.7"/><path d="M12 11c-3.1 0-5.6 2.3-5.6 4.9 0 1.9 1.5 3.1 3.2 2.8 1-.2 1.6-.4 2.4-.4s1.4.2 2.4.4c1.7.3 3.2-.9 3.2-2.8 0-2.6-2.5-4.9-5.6-4.9z"/></svg>
+            <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor"><ellipse cx="7" cy="8.2" rx="2" ry="2.7"/><ellipse cx="12" cy="6.6" rx="2" ry="2.7"/><ellipse cx="17" cy="8.2" rx="2" ry="2.7"/><path d="M12 11c-3.1 0-5.6 2.3-5.6 4.9 0 1.9 1.5 3.1 3.2 2.8 1-.2 1.6-.4 2.4-.4s1.4.2 2.4.4c1.7.3 3.2-.9 3.2-2.8 0-2.6-2.5-4.9-5.6-4.9z"/></svg>
           </span>
           <span class="brand-name">灵犀</span>
-          <span class="brand-sub">你的桌面小伙伴</span>
+          <span class="brand-sub">桌面智能助手</span>
         </div>
         <div class="win-actions">
           <button class="icon-btn" id="pin-btn" title="置顶" aria-label="置顶">
@@ -54,14 +54,15 @@
 
       <!-- 改写模式：只属于「改写」视图，切换到其他页时由 JS 隐藏 -->
       <nav class="modes" id="modes" aria-label="改写模式">
-        <button class="chip is-active" data-mode="polish" title="保留全部原意，按原文场景丰富并提升表达">✨ 润色</button>
-        <button class="chip" data-mode="proofread" title="只修正错别字、标点和语法">🔍 纠错</button>
-        <button class="chip featured" data-mode="prompt-enhance" title="补全角色、目标、约束、输出格式与示例">🪄 提示词增强</button>
+        <button class="chip is-active" data-mode="polish" title="保留全部原意，按原文场景丰富并提升表达">润色</button>
+        <button class="chip" data-mode="proofread" title="只修正错别字、标点和语法">纠错</button>
+        <button class="chip featured" data-mode="prompt-enhance" title="补全角色、目标、约束、输出格式与示例">提示词增强</button>
       </nav>
 
       <section class="diff-wrap" id="rewrite-view">
         <div class="diff-head">
           <span class="diff-title">改动预览</span>
+          <button class="mini-btn" id="recapture-btn" title="从当前应用抓取选中的文字，等同 Ctrl+Alt+Space">读取选中</button>
           <span class="stat" id="stat">
             <span class="add" id="stat-add">+0</span>
             <span class="del" id="stat-del">-0</span>
@@ -80,15 +81,15 @@
       </section>
 
       <section class="qq-view" id="qq-view" hidden>
-        <div class="qq-message-head"><span id="qq-conversation">前台 QQ 会话</span><button class="mini-btn" id="qq-refresh">📥 读取选中</button></div>
-        <div class="qq-message" id="qq-message">在 QQ 里双击或拖选对方的一条消息，再点「读取选中」交给我～我会按你选的内容拟一条回复，写不写、怎么改都由你决定，绝不自动发送。</div>
+        <div class="qq-message-head"><span id="qq-conversation">前台 QQ 会话</span><button class="mini-btn" id="qq-refresh">读取选中</button></div>
+        <div class="qq-message" id="qq-message">在 QQ 中选中对方的一条消息后点击「读取选中」，将基于该内容生成回复草稿；是否写入由你确认，不会自动发送。</div>
         <label for="qq-draft">回复草稿（确认后才写入，不会自动发送）</label>
         <textarea id="qq-draft" placeholder="草稿会出现在这里，你可以随手改几句再写入 QQ"></textarea>
         <div class="qq-actions"><button class="btn ghost" id="qq-generate">生成草稿</button><button class="btn primary" id="qq-write">确认写入 QQ</button></div>
       </section>
 
       <section class="settings-panel" id="settings-panel" hidden>
-        <div class="settings-divider"><span>🔌 模型服务</span></div>
+        <div class="settings-divider"><span>模型服务</span></div>
         <label>服务商预设<select id="provider-preset"><option value="">自定义 / 不改动</option><option value="deepseek">DeepSeek（deepseek-chat）</option><option value="dashscope">通义千问（qwen-plus）</option><option value="openai">OpenAI（gpt-4o-mini）</option></select></label>
         <label>模型后端<select id="backend-select"><option value="local">本地 Qwen2.5 1.5B（离线/隐私）</option><option value="cloud">OpenAI 兼容云端（最高质量）</option></select></label>
         <label>Endpoint<input id="endpoint-input" type="url" placeholder="https://api.openai.com" /></label>
@@ -99,7 +100,7 @@
         <p class="settings-note">本地 1.5B 适合短文本和隐私场景；80 字以上或追求高质量时，建议使用云端强模型。</p>
         <button class="btn primary" id="save-settings">保存设置</button>
 
-        <div class="settings-divider"><span>🐾 桌宠形象</span></div>
+        <div class="settings-divider"><span>桌宠形象</span></div>
         <div class="skin-grid" id="skin-grid" aria-label="桌宠皮肤"></div>
         <p class="settings-note">点一下卡片就能换个形象；把新皮肤文件夹放进 assets/skins/ 即可被认出，桌宠窗口右键也能快捷切换。</p>
         <label>气泡文案（留空使用皮肤默认）</label>
@@ -112,7 +113,7 @@
         <label class="remember-key"><input id="pet-visible" type="checkbox" checked /> 在桌面显示桌宠</label>
         <button class="btn ghost" id="save-pet-options">保存桌宠设置</button>
 
-        <div class="settings-divider"><span>🪟 窗口行为</span></div>
+        <div class="settings-divider"><span>窗口行为</span></div>
         <label class="remember-key"><input id="panel-auto-hide" type="checkbox" checked /> 切换到其他应用时自动收起面板</label>
         <label class="remember-key"><input id="panel-remember-pos" type="checkbox" checked /> 记住面板拖动位置（关闭则跟随光标出现）</label>
         <button class="btn ghost" id="save-window-options">保存窗口设置</button>
@@ -121,10 +122,10 @@
       <section class="agent-view" id="agent-view" hidden>
         <div class="agent-header">
           <span class="agent-title">和灵犀聊聊</span>
-          <button class="mini-btn" id="agent-reset" title="新对话">✨ 新对话</button>
+          <button class="mini-btn" id="agent-reset" title="新对话">新对话</button>
         </div>
         <div class="chat-messages" id="chat-messages">
-          <div class="chat-empty"><span class="chat-hint-title">想让我帮你做点什么？</span><br>“读取剪贴板并帮我总结”<br>“列出文档目录里的文件”<br>“根据 QQ 里选中的消息生成回复草稿”</div>
+          <div class="chat-empty"><span class="chat-hint-title">试试这样问：</span><br>“读取剪贴板并帮我总结”<br>“列出文档目录里的文件”<br>“根据 QQ 里选中的消息生成回复草稿”</div>
         </div>
         <div class="chat-input-area">
           <textarea id="chat-input" placeholder="说说你的想法，回车发送…" rows="2"></textarea>
@@ -137,23 +138,23 @@
           <input class="tools-search" id="tools-search" type="search" placeholder="搜索 Agent 能力…" />
           <span class="tools-count" id="tools-count" hidden>0</span>
         </div>
-        <button class="market-banner" id="tools-market-btn" type="button" disabled aria-label="插件市场，即将开放">
-          <span class="market-banner-icon" aria-hidden="true">🏪</span>
+        <button class="market-banner" id="tools-market-btn" type="button" aria-label="打开插件市场">
+          <span class="market-banner-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m7.5 4.27 9 5.15"/><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></svg></span>
           <span class="market-banner-body">
             <span class="market-banner-title">插件市场</span>
-            <span class="market-banner-desc">给小伙伴添点新玩法：皮肤、小工具、新能力都在这里</span>
+            <span class="market-banner-desc">皮肤、小工具与新能力，集中在这里获取</span>
           </span>
-          <span class="market-banner-badge">✨ 即将开放</span>
+          <span class="market-banner-badge">进入</span>
           <span class="market-banner-tags" aria-hidden="true">
-            <span class="market-tag">🎨 皮肤包</span>
-            <span class="market-tag">🧩 小工具</span>
-            <span class="market-tag">⚡ 新能力</span>
+            <span class="market-tag">皮肤包</span>
+            <span class="market-tag">小工具</span>
+            <span class="market-tag">新能力</span>
           </span>
         </button>
         <div class="widgets-section" id="widgets-section">
           <div class="widgets-section-head">
             <span class="widgets-section-title">桌面小工具</span>
-            <span class="widgets-section-sub">点一下，开一扇小窗</span>
+            <span class="widgets-section-sub">点击打开独立窗口</span>
           </div>
           <div class="widgets-grid" id="widgets-grid"></div>
         </div>
@@ -168,7 +169,32 @@
           <button class="tools-tab" data-cat="transform">变换</button>
         </div>
         <div class="tools-grid" id="tools-grid"></div>
-        <div class="tools-empty" id="tools-empty" hidden>没找到匹配的工具，换个词试试？</div>
+        <div class="tools-empty" id="tools-empty" hidden>未找到匹配的工具</div>
+      </section>
+
+      <section class="market-view" id="market-view" hidden>
+        <div class="market-toolbar">
+          <button class="market-back" id="market-back" type="button">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>
+            返回
+          </button>
+          <span class="market-title">插件市场</span>
+          <button class="market-refresh" id="market-refresh" type="button">刷新</button>
+        </div>
+        <div class="market-tabs" id="market-tabs">
+          <button class="market-tab" data-tab="plugins">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 3.34V5a3 3 0 0 0 3 3"/><path d="M11 21.95V18a2 2 0 0 0-2-2 2 2 0 0 0-2 2v4"/><path d="M21.54 15H17a2 2 0 0 0-2 2 2 2 0 0 0 2 2h2"/><path d="M3 2v1c0 1 1 2 2 2h5a2 2 0 0 1 2 2 2 2 0 0 0 2 2 2 2 0 0 1 2 2 2 2 0 0 0 2 2h3"/><path d="M11 2h1a5 5 0 0 1 5 5v1a2 2 0 0 0 2 2h3"/></svg>
+            插件市场
+          </button>
+          <button class="market-tab" data-tab="skins">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 2 7l10 5 10-5-10-5Z"/><path d="m2 17 10 5 10-5"/><path d="m2 12 10 5 10-5"/></svg>
+            皮肤商店
+          </button>
+        </div>
+        <div class="market-error" id="market-error" hidden></div>
+        <div class="market-grid" id="market-grid"></div>
+        <div class="market-empty" id="market-empty" hidden>暂无可安装的工具插件</div>
+        <div class="market-empty" id="skins-empty" hidden>暂无可安装的皮肤</div>
       </section>
 
       <div class="status" id="status" hidden></div>
@@ -176,7 +202,7 @@
       <footer class="actions" id="rewrite-actions">
         <button class="btn ghost" id="undo-btn">撤销</button>
         <button class="btn primary" id="apply-btn">
-          应用到文档 <kbd>Ctrl</kbd><kbd>⏎</kbd>
+          应用到文档 <kbd>Ctrl</kbd><kbd>Enter</kbd>
         </button>
       </footer>
       <button class="resize-grip" id="resize-grip" title="拖动调整窗口大小" aria-label="拖动调整窗口大小"></button>

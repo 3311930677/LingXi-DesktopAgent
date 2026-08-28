@@ -23,6 +23,7 @@ mod panel;
 mod placement;
 mod pet;
 mod pet_skin;
+mod market;
 mod qq;
 mod rewrite;
 // OwO 迁移前的旧键盘钩子实现，仅作参考。整个文件编译期排除，稳定后删除。
@@ -51,8 +52,10 @@ fn main() {
             rewrite::preview_transform,
             rewrite::apply_transform,
             rewrite::undo_last,
+            rewrite::trigger_transform,
             panel::hide_overlay,
             panel::start_window_drag,
+panel::move_pet_by,
             panel::start_window_resize,
             settings::get_backend_settings,
             settings::save_backend_settings,
@@ -63,6 +66,10 @@ fn main() {
             pet::current_pet_config,
             pet::set_pet_skin,
             pet::set_pet_options,
+            market::market_list,
+            market::market_install,
+            market::market_uninstall,
+            market::list_tool_plugins,
             panel::toggle_panel,
             panel::set_panel_focusable,
             qq::qq_poll_latest,
@@ -96,6 +103,7 @@ fn main() {
             widgets::widget_clipboard_clear,
             widgets::widget_clipboard_remove,
             widgets::widget_read_clipboard,
+            widgets::widget_save_image,
             settings::get_window_options,
             settings::set_window_options
         ])
@@ -109,6 +117,8 @@ fn main() {
         })
         .setup(|app| {
             let state = app.state::<AppState>();
+            // 启动即扫描用户插件目录，工具插件随内置工具一并注册。
+            market::sync_plugin_tools(&state);
             let (remember_position, pet_visible, saved) = {
                 let settings = state.backend.safe_lock();
                 let windows = state.window_state.safe_lock();

@@ -233,7 +233,9 @@ pub(crate) fn undo_last(state: State<AppState>) -> Result<(), String> {
     *state.last_receipt.safe_lock() = None;
     Ok(())
 }
-pub(crate) fn on_transform(app: &AppHandle) {
+/// Shared capture flow for the Ctrl+Alt+Space hotkey and the manual button.
+/// Returns whether a selection snapshot was captured and the panel opened.
+fn capture_and_show(app: &AppHandle) -> bool {
     let adapter = WindowsAdapter::new();
     match adapter.capture_selection() {
         Ok(snapshot) => {
@@ -252,9 +254,25 @@ pub(crate) fn on_transform(app: &AppHandle) {
                 }
                 let _ = window.show();
             }
+            true
         }
-        Err(error) => eprintln!("capture failed: {error}"),
+        Err(error) => {
+            eprintln!("capture failed: {error}");
+            false
+        }
     }
+}
+
+pub(crate) fn on_transform(app: &AppHandle) {
+    capture_and_show(app);
+}
+
+/// Manual "capture selection" button. Safe to call while the panel is visible:
+/// the rewrite view keeps the window non-activating (WS_EX_NOACTIVATE), so UIA
+/// focus — and therefore the user's selection — stays in the source app.
+#[tauri::command]
+pub(crate) fn trigger_transform(app: AppHandle) -> bool {
+    capture_and_show(&app)
 }
 pub(crate) fn on_undo(app: &AppHandle) {
     let state = app.state::<AppState>();

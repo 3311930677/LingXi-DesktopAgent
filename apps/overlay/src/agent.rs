@@ -58,6 +58,8 @@ pub(crate) struct ToolView {
     pub(crate) description: String,
     pub(crate) risk_level: String,
     pub(crate) enabled: bool,
+    /// "builtin"（内置工具）| "plugin"（市场安装的插件工具）。
+    pub(crate) source: String,
 }
 
 /// Send a message to the agent and get a reply. The agent may call tools
@@ -87,6 +89,12 @@ pub(crate) async fn agent_chat(
     // cheap. We copy the user's enabled/disabled state from the stored registry.
     let mut registry = ToolRegistry::new();
     lingxi_tools_windows::register_default_tools(&mut registry);
+    // 工具插件与内置工具同权参与本轮对话（enabled 状态由下方循环统一复制）。
+    if let Some(root) = crate::market::plugins_root() {
+        for plugin in lingxi_tools::plugin::scan_plugins(&root) {
+            registry.register(plugin);
+        }
+    }
     {
         let reg = state.tool_registry.safe_lock();
         for schema in reg.all_schemas() {
@@ -171,6 +179,8 @@ pub(crate) fn agent_reset(state: State<AppState>) -> Result<(), String> {
 #[tauri::command]
 pub(crate) fn list_tools(state: State<AppState>) -> Vec<ToolView> {
     let reg = state.tool_registry.safe_lock();
+    let plugin_names: Vec<String> =
+        state.plugin_tool_map.safe_lock().values().cloned().collect();
     reg.all_schemas()
         .iter()
         .map(|s| {
@@ -180,6 +190,11 @@ pub(crate) fn list_tools(state: State<AppState>) -> Vec<ToolView> {
                 description: s.description.clone(),
                 risk_level: format!("{:?}", risk).to_lowercase(),
                 enabled: reg.is_enabled(&s.name),
+                source: if plugin_names.contains(&s.name) {
+                    "plugin".into()
+                } else {
+                    "builtin".into()
+                },
             }
         })
         .collect()

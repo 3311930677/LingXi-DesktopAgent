@@ -34,6 +34,8 @@ pub(crate) struct BackendSettings {
     pub(crate) panel_auto_hide: bool,
     /// 记住面板拖动位置；关闭则每次出现在光标附近。
     pub(crate) panel_remember_position: bool,
+    /// 插件市场清单地址；留空 = 仅使用内置清单。
+    pub(crate) market_url: String,
 }
 
 impl Default for BackendSettings {
@@ -49,6 +51,7 @@ impl Default for BackendSettings {
             pet_visible: true,
             panel_auto_hide: true,
             panel_remember_position: true,
+            market_url: String::new(),
         }
     }
 }

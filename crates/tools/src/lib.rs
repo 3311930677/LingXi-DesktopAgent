@@ -6,6 +6,7 @@
 
 pub mod builtin;
 pub mod context;
+pub mod plugin;
 pub mod registry;
 pub mod schema;
 

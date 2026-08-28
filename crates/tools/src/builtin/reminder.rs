@@ -186,3 +186,186 @@ fn rewrite(file: &Path, items: &[Reminder]) -> Result<(), String> {
     out.flush().map_err(|e| e.to_string())?;
     fs::rename(temp, file).map_err(|e| e.to_string())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn temp_root() -> PathBuf {
+        let root = std::env::temp_dir().join(format!("lingxi-reminder-test-{}", now_nanos()));
+        fs::create_dir_all(&root).unwrap();
+        root
+    }
+
+    fn cleanup(root: &Path) {
+        let _ = fs::remove_dir_all(root);
+    }
+
+    async fn set_ok(root: &Path, params: serde_json::Value) -> Reminder {
+        let ctx = ToolContext::auto_confirm(root);
+        let result = SetReminderTool.execute(params, &ctx).await;
+        assert!(result.success, "set 应成功: {}", result.output);
+        serde_json::from_value(result.data.unwrap()).unwrap()
+    }
+
+    #[tokio::test]
+    async fn set_reminder_persists_with_delay() {
+        let root = temp_root();
+        let reminder = set_ok(&root, json!({"message": "喝水", "delay_seconds": 3600})).await;
+        assert!(reminder.id.starts_with("r-"));
+        assert_eq!(reminder.message, "喝水");
+        assert!(!reminder.cancelled);
+        assert!(reminder.due_at > unix_now());
+        assert!(reminder.due_at <= unix_now() + 3600);
+        let stored = read_all(&path(&root)).unwrap();
+        assert_eq!(stored.len(), 1);
+        assert_eq!(stored[0].id, reminder.id);
+        cleanup(&root);
+    }
+
+    #[tokio::test]
+    async fn set_reminder_validates_message() {
+        let root = temp_root();
+        let ctx = ToolContext::auto_confirm(&root);
+        let tool = SetReminderTool;
+        for bad in [json!({}), json!({"message": ""}), json!({"message": "   "})] {
+            let result = tool.execute(bad, &ctx).await;
+            assert!(!result.success);
+            assert!(result.output.contains("message 不能为空"));
+        }
+        let overlong: String = "字".repeat(1001);
+        let result = tool
+            .execute(json!({"message": overlong, "delay_seconds": 60}), &ctx)
+            .await;
+        assert!(!result.success);
+        assert!(result.output.contains("最多支持 1000 个字符"));
+        let boundary: String = "字".repeat(1000);
+        let result = tool
+            .execute(json!({"message": boundary, "delay_seconds": 60}), &ctx)
+            .await;
+        assert!(result.success, "恰好 1000 字应成功: {}", result.output);
+        assert!(!result.output.contains("最多支持"));
+        cleanup(&root);
+    }
+
+    #[tokio::test]
+    async fn set_reminder_validates_due_time() {
+        let root = temp_root();
+        let ctx = ToolContext::auto_confirm(&root);
+        let tool = SetReminderTool;
+        let past = unix_now() - 10;
+        for bad in [
+            json!({"message": "x", "due_at": past}),
+            json!({"message": "x"}),
+            json!({"message": "x", "delay_seconds": 0}),
+            json!({"message": "x", "delay_seconds": -5}),
+        ] {
+            let result = tool.execute(bad, &ctx).await;
+            assert!(!result.success);
+            assert!(result.output.contains("必须提供未来的 due_at"));
+        }
+        let due = unix_now() + 120;
+        let result = tool
+            .execute(json!({"message": "x", "due_at": due}), &ctx)
+            .await;
+        assert!(result.success);
+        let reminder: Reminder = serde_json::from_value(result.data.unwrap()).unwrap();
+        assert_eq!(reminder.due_at, due);
+        cleanup(&root);
+    }
+
+    #[tokio::test]
+    async fn set_reminder_prefers_future_due_at_over_delay() {
+        let root = temp_root();
+        let due = unix_now() + 300;
+        let reminder = set_ok(
+            &root,
+            json!({"message": "双参", "due_at": due, "delay_seconds": 999_999}),
+        )
+        .await;
+        assert_eq!(reminder.due_at, due);
+        cleanup(&root);
+    }
+
+    #[tokio::test]
+    async fn list_reminders_empty_store() {
+        let root = temp_root();
+        let ctx = ToolContext::auto_confirm(&root);
+        let result = ListRemindersTool.execute(json!({}), &ctx).await;
+        assert!(result.success);
+        assert!(result.output.contains("0 条提醒"));
+        assert_eq!(result.data.unwrap().as_array().unwrap().len(), 0);
+        cleanup(&root);
+    }
+
+    #[tokio::test]
+    async fn list_reminders_filters_cancelled_and_expired() {
+        let root = temp_root();
+        let past = json!({"id": "r-past", "due_at": unix_now() - 100, "message": "已过期", "cancelled": false});
+        let cancelled = json!({"id": "r-cancelled", "due_at": unix_now() + 999, "message": "已取消", "cancelled": true});
+        fs::create_dir_all(path(&root).parent().unwrap()).unwrap();
+        {
+            let mut out = fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path(&root))
+                .unwrap();
+            serde_json::to_writer(&mut out, &past).unwrap();
+            out.write_all(b"\n").unwrap();
+            serde_json::to_writer(&mut out, &cancelled).unwrap();
+            out.write_all(b"\n").unwrap();
+        }
+        set_ok(&root, json!({"message": "未来", "delay_seconds": 3600})).await;
+
+        let ctx = ToolContext::auto_confirm(&root);
+        let tool = ListRemindersTool;
+        let result = tool.execute(json!({}), &ctx).await;
+        assert!(result.success);
+        assert_eq!(result.data.unwrap().as_array().unwrap().len(), 2);
+
+        let result = tool.execute(json!({"include_expired": true}), &ctx).await;
+        assert_eq!(result.data.unwrap().as_array().unwrap().len(), 2);
+
+        let result = tool.execute(json!({"include_expired": false}), &ctx).await;
+        let active = result.data.unwrap().as_array().unwrap().clone();
+        assert_eq!(active.len(), 1);
+        assert_eq!(active[0]["message"], json!("未来"));
+        assert!(active[0]["due_at"].as_i64().unwrap() > unix_now());
+        cleanup(&root);
+    }
+
+    #[tokio::test]
+    async fn cancel_reminder_flow() {
+        let root = temp_root();
+        let first = set_ok(&root, json!({"message": "一", "delay_seconds": 600})).await;
+        let second = set_ok(&root, json!({"message": "二", "delay_seconds": 600})).await;
+
+        let ctx = ToolContext::auto_confirm(&root);
+        let tool = CancelReminderTool;
+        let result = tool.execute(json!({"id": first.id}), &ctx).await;
+        assert!(result.success, "{}", result.output);
+        assert!(result.output.contains(&first.id));
+
+        let stored = read_all(&path(&root)).unwrap();
+        assert_eq!(stored.len(), 2);
+        assert!(stored.iter().find(|r| r.id == first.id).unwrap().cancelled);
+        assert!(!stored.iter().find(|r| r.id == second.id).unwrap().cancelled);
+        assert!(!path(&root).with_extension("tmp").exists());
+
+        for missing in ["r-nope", first.id.as_str()] {
+            let result = tool.execute(json!({"id": missing}), &ctx).await;
+            assert!(!result.success);
+            assert!(result.output.contains("未找到提醒"));
+        }
+        let result = tool.execute(json!({"id": ""}), &ctx).await;
+        assert!(!result.success);
+        assert!(result.output.contains("id 不能为空"));
+
+        let result = ListRemindersTool.execute(json!({}), &ctx).await;
+        let items = result.data.unwrap().as_array().unwrap().clone();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0]["id"], json!(second.id));
+        cleanup(&root);
+    }
+}

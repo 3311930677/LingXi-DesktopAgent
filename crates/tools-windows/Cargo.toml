@@ -5,8 +5,8 @@ edition.workspace = true
 description = "Windows platform tool implementations for the LingXi agent"
 
 [dependencies]
-# `net` enables the web_fetch / translate built-ins.
-lingxi-tools = { path = "../tools", features = ["net"] }
+# 六个信息类工具（含 web_fetch/translate）已改为市场插件，不再需要 net feature。
+lingxi-tools = { path = "../tools" }
 assistant-windows = { path = "../assistant-windows" }
 assistant-core = { path = "../assistant-core" }
 async-trait.workspace = true

@@ -35,6 +35,13 @@ impl ToolRegistry {
         self.enabled.insert(name.to_string(), enabled);
     }
 
+    /// Unregister a tool by name (used when a plugin is uninstalled).
+    /// Returns true if the tool was present.
+    pub fn remove(&mut self, name: &str) -> bool {
+        self.enabled.remove(name);
+        self.tools.remove(name).is_some()
+    }
+
     /// Check whether a tool is currently enabled.
     pub fn is_enabled(&self, name: &str) -> bool {
         self.enabled.get(name).copied().unwrap_or(false)
@@ -177,6 +184,15 @@ mod tests {
         let result = registry.execute("run_cmd", json!({}), &ctx).await.unwrap();
         assert!(!result.success);
         assert!(result.output.contains("取消"));
+    }
+
+    #[test]
+    fn remove_unregisters_tool() {
+        let mut registry = ToolRegistry::new();
+        registry.register(Arc::new(EchoTool));
+        assert!(registry.remove("echo"));
+        assert!(registry.all_schemas().is_empty());
+        assert!(!registry.remove("echo"));
     }
 
     #[tokio::test]

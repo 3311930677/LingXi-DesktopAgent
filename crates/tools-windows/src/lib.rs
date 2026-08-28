@@ -58,17 +58,9 @@ pub fn register_default_tools(registry: &mut ToolRegistry) {
     // File search (ROADMAP 0.3)
     registry.register(Arc::new(search_tools::SearchFilesTool));
 
-    // Cross-platform information tools (ROADMAP 0.4)
-    registry.register(Arc::new(lingxi_tools::builtin::time::GetTimeTool));
-    registry.register(Arc::new(lingxi_tools::builtin::calc::CalculateTool));
-    registry.register(Arc::new(lingxi_tools::builtin::fetch::WebFetchTool));
-    registry.register(Arc::new(lingxi_tools::builtin::search::WebSearchTool));
-    registry.register(Arc::new(lingxi_tools::builtin::translate::TranslateTool));
-    registry.register(Arc::new(lingxi_tools::builtin::reminder::SetReminderTool));
-    registry.register(Arc::new(lingxi_tools::builtin::reminder::ListRemindersTool));
-    registry.register(Arc::new(
-        lingxi_tools::builtin::reminder::CancelReminderTool,
-    ));
+    // 六个信息类内置工具（get_time/calculate/web_fetch/web_search/
+    // translate/set_reminder）已整体改为市场分发的工具插件，不再编译期注册。
+    // 安装插件后由 sync_plugin_tools 注册，卸载即消失。
 
     // High-impact tools stay unavailable until the UI has collected an
     // explicit per-invocation approval. This prevents a model from writing

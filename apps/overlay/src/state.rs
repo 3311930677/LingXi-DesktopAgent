@@ -70,6 +70,10 @@ pub(crate) struct AppState {
     pub(crate) tool_registry: std::sync::Mutex<ToolRegistry>,
     /// Agent conversation session, persists across messages within a session.
     pub(crate) agent_session: std::sync::Mutex<Session>,
+    /// 已注册进 tool_registry 的插件工具：插件 id → 工具名。
+    /// 卸载/同步时按值反向移除注册表项；list_tools 据此标注 source。
+    pub(crate) plugin_tool_map:
+        std::sync::Mutex<std::collections::HashMap<String, String>>,
     /// 取色放大镜：进入取色时的全屏截图 data URL，供 color-lens 窗口拉取。
     pub(crate) lens_image: Mutex<Option<String>>,
 }
@@ -94,6 +98,7 @@ impl Default for AppState {
                 reg
             }),
             agent_session: std::sync::Mutex::new(crate::agent::load_agent_session()),
+            plugin_tool_map: std::sync::Mutex::new(Default::default()),
             lens_image: Mutex::new(None),
         }
     }

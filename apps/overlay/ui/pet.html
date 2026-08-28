@@ -9,13 +9,9 @@
   <body>
     <button class="pet idle" id="pet" aria-label="打开灵犀面板" title="单击打开灵犀，双击逗它玩，在它身上滑来滑去就是摸摸头；拖动可移动，右键换皮肤">
       <span class="halo"></span>
-      <img
-        class="avatar"
-        id="pet-avatar"
-        src="assets/skins/lingxi-hamster/idle.png"
-        alt="灵犀仓鼠"
-        draggable="false"
-      />
+      <div class="avatar" id="pet-avatar" role="img" aria-label="灵犀桌宠形象">
+        <img id="pet-avatar-img" src="assets/skins/lingxi-hamster/idle.png" alt="" draggable="false" />
+      </div>
       <span class="fx-layer" id="fx" aria-hidden="true"></span>
       <span class="bubble" id="bubble">灵犀</span>
     </button>
