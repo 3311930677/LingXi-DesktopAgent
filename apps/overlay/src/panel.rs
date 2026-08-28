@@ -83,14 +83,12 @@ pub(crate) fn spawn_panel_autohide_worker(app: AppHandle) {
             let Ok(visible) = panel.is_visible() else {
                 continue;
             };
-            let auto_hide = app
-                .state::<AppState>()
-                .backend
-                .safe_lock()
-                .panel_auto_hide;
+            let auto_hide = app.state::<AppState>().backend.safe_lock().panel_auto_hide;
             if !visible || !auto_hide {
                 if prev_visible {
-                    eprintln!("[lingxi] autohide: disengaged (visible={visible}, auto_hide={auto_hide})");
+                    eprintln!(
+                        "[lingxi] autohide: disengaged (visible={visible}, auto_hide={auto_hide})"
+                    );
                 }
                 prev_visible = false;
                 anchor = 0;
@@ -164,7 +162,10 @@ pub(crate) fn quit_app(app: AppHandle) {
 /// window-plugin permission path used by `data-tauri-drag-region`, which is
 /// unreliable for a non-activating WebView window.
 #[tauri::command]
-pub(crate) fn start_window_drag(window: WebviewWindow, state: State<AppState>) -> Result<(), String> {
+pub(crate) fn start_window_drag(
+    window: WebviewWindow,
+    state: State<AppState>,
+) -> Result<(), String> {
     // 只有面板被拖动才锁定位置；拖桌宠不应影响面板的跟随光标行为。
     if window.label() == "main" {
         state.user_positioned.store(true, Ordering::Relaxed);

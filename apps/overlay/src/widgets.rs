@@ -340,7 +340,14 @@ try {
 fn run_winrt_ocr(png_path: &std::path::Path) -> Result<Vec<OcrLine>, String> {
     let output = std::process::Command::new("powershell")
         .env("LINGXI_OCR_PATH", png_path)
-        .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", WINRT_OCR_SCRIPT])
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            WINRT_OCR_SCRIPT,
+        ])
         .output()
         .map_err(|e| format!("启动 PowerShell 失败: {e}"))?;
 
@@ -348,7 +355,11 @@ fn run_winrt_ocr(png_path: &std::path::Path) -> Result<Vec<OcrLine>, String> {
         let err = String::from_utf8_lossy(&output.stderr).trim().to_string();
         return Err(format!(
             "WinRT OCR 失败: {}",
-            if err.is_empty() { "未知错误（无 stderr 输出）".to_string() } else { err }
+            if err.is_empty() {
+                "未知错误（无 stderr 输出）".to_string()
+            } else {
+                err
+            }
         ));
     }
 
@@ -359,8 +370,8 @@ fn run_winrt_ocr(png_path: &std::path::Path) -> Result<Vec<OcrLine>, String> {
 
     // ConvertTo-Json emits a bare object (not an array) when there is exactly
     // one line; normalize both shapes.
-    let value: serde_json::Value =
-        serde_json::from_str(&stdout).map_err(|e| format!("解析 OCR 结果失败: {e}\n原始输出: {stdout}"))?;
+    let value: serde_json::Value = serde_json::from_str(&stdout)
+        .map_err(|e| format!("解析 OCR 结果失败: {e}\n原始输出: {stdout}"))?;
     let items = match value {
         serde_json::Value::Array(arr) => arr,
         obj @ serde_json::Value::Object(_) => vec![obj],
@@ -369,13 +380,23 @@ fn run_winrt_ocr(png_path: &std::path::Path) -> Result<Vec<OcrLine>, String> {
 
     let mut lines = Vec::with_capacity(items.len());
     for item in items {
-        let raw = item.get("text").and_then(|v| v.as_str()).unwrap_or("").trim();
+        let raw = item
+            .get("text")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim();
         let text = normalize_ocr_text(raw);
         if text.is_empty() {
             continue;
         }
         let num = |k: &str| item.get(k).and_then(|v| v.as_f64()).unwrap_or(0.0);
-        lines.push(OcrLine { text, x: num("x"), y: num("y"), w: num("w"), h: num("h") });
+        lines.push(OcrLine {
+            text,
+            x: num("x"),
+            y: num("y"),
+            w: num("w"),
+            h: num("h"),
+        });
     }
     Ok(lines)
 }
@@ -386,10 +407,12 @@ fn normalize_ocr_text(text: &str) -> String {
     let chars: Vec<char> = text.chars().collect();
     let mut out = String::with_capacity(text.len());
     for (i, &ch) in chars.iter().enumerate() {
-        if ch.is_whitespace() && i > 0 && i + 1 < chars.len() {
-            if is_cjk_char(chars[i - 1]) || is_cjk_char(chars[i + 1]) {
-                continue;
-            }
+        if ch.is_whitespace()
+            && i > 0
+            && i + 1 < chars.len()
+            && (is_cjk_char(chars[i - 1]) || is_cjk_char(chars[i + 1]))
+        {
+            continue;
         }
         out.push(ch);
     }
@@ -415,7 +438,12 @@ fn is_cjk_char(c: char) -> bool {
 /// this on the main thread would freeze the widget window; spawn_blocking +
 /// 20s timeout keeps the UI responsive and prevents indefinite hangs.
 #[tauri::command]
-pub(crate) async fn widget_ocr(x: i32, y: i32, w: i32, h: i32) -> Result<serde_json::Value, String> {
+pub(crate) async fn widget_ocr(
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+) -> Result<serde_json::Value, String> {
     #[cfg(windows)]
     {
         use base64::Engine as _;
@@ -430,8 +458,7 @@ pub(crate) async fn widget_ocr(x: i32, y: i32, w: i32, h: i32) -> Result<serde_j
             );
 
             let temp_path = std::env::temp_dir().join("lingxi_ocr_temp.png");
-            std::fs::write(&temp_path, &png_bytes)
-                .map_err(|e| format!("写入临时文件失败: {e}"))?;
+            std::fs::write(&temp_path, &png_bytes).map_err(|e| format!("写入临时文件失败: {e}"))?;
             let lines = run_winrt_ocr(&temp_path);
             let _ = std::fs::remove_file(&temp_path);
             let lines = lines?;
@@ -466,9 +493,7 @@ pub(crate) async fn widget_ocr(x: i32, y: i32, w: i32, h: i32) -> Result<serde_j
 /// 翻译-style). Every visible LingXi window (main panel, pet, widgets) is
 /// hidden first so the capture only contains user content.
 #[tauri::command]
-pub(crate) async fn widget_ocr_fullscreen(
-    app: AppHandle,
-) -> Result<serde_json::Value, String> {
+pub(crate) async fn widget_ocr_fullscreen(app: AppHandle) -> Result<serde_json::Value, String> {
     #[cfg(windows)]
     {
         use base64::Engine as _;
@@ -496,8 +521,7 @@ pub(crate) async fn widget_ocr_fullscreen(
             );
 
             let temp_path = std::env::temp_dir().join("lingxi_ocr_full.png");
-            std::fs::write(&temp_path, &png_bytes)
-                .map_err(|e| format!("写入临时文件失败: {e}"))?;
+            std::fs::write(&temp_path, &png_bytes).map_err(|e| format!("写入临时文件失败: {e}"))?;
             let lines = run_winrt_ocr(&temp_path);
             let _ = std::fs::remove_file(&temp_path);
             let lines = lines?;
@@ -604,12 +628,7 @@ pub(crate) fn widget_lens_get_image(state: tauri::State<'_, AppState>) -> Result
 
 /// 取色窗口确认取色：销毁窗口，广播颜色并恢复取色器。
 #[tauri::command]
-pub(crate) async fn widget_lens_pick(
-    app: AppHandle,
-    r: i32,
-    g: i32,
-    b: i32,
-) -> Result<(), String> {
+pub(crate) async fn widget_lens_pick(app: AppHandle, r: i32, g: i32, b: i32) -> Result<(), String> {
     use tauri::Emitter as _;
     finish_lens(&app);
     app.emit(
@@ -648,9 +667,7 @@ fn finish_lens(app: &AppHandle) {
 /// timeout wraps the blocking task so the widget can never hang.
 #[tauri::command]
 pub(crate) async fn widget_get_weather(city: Option<String>) -> Result<serde_json::Value, String> {
-    let city = city
-        .map(|c| c.trim().to_string())
-        .filter(|c| !c.is_empty());
+    let city = city.map(|c| c.trim().to_string()).filter(|c| !c.is_empty());
     let task = tauri::async_runtime::spawn_blocking(move || {
         let (lat, lon, city_label) = match &city {
             Some(name) => geocode_city(name)?,
@@ -661,8 +678,8 @@ pub(crate) async fn widget_get_weather(city: Option<String>) -> Result<serde_jso
             "https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current_weather=true&daily=weather_code,temperature_2m_max,temperature_2m_min,relative_humidity_2m_max,wind_speed_10m_max&timezone=auto"
         );
         let resp = http_get_text(&url)?;
-        let data: serde_json::Value = serde_json::from_str(&resp)
-            .map_err(|e| format!("解析天气失败: {e}"))?;
+        let data: serde_json::Value =
+            serde_json::from_str(&resp).map_err(|e| format!("解析天气失败: {e}"))?;
 
         let cw = data.get("current_weather").ok_or("无当前天气数据")?;
         let daily = data.get("daily").ok_or("无预报数据")?;
@@ -716,7 +733,7 @@ pub(crate) async fn widget_get_weather(city: Option<String>) -> Result<serde_jso
 /// Evaluate a mathematical expression.
 #[tauri::command]
 pub(crate) async fn widget_calculate(expression: String) -> Result<serde_json::Value, String> {
-    use lingxi_tools::{builtin::calc::CalculateTool, Tool, ToolContext, AutoConfirm};
+    use lingxi_tools::{builtin::calc::CalculateTool, AutoConfirm, Tool, ToolContext};
     let tool = CalculateTool;
     let ctx = ToolContext {
         working_dir: std::env::current_dir().unwrap_or_default(),
@@ -840,8 +857,7 @@ pub(crate) async fn widget_translate_lines(
     }
 
     let n = lines.len();
-    let input = serde_json::to_string(&lines)
-        .map_err(|e| format!("序列化输入失败: {e}"))?;
+    let input = serde_json::to_string(&lines).map_err(|e| format!("序列化输入失败: {e}"))?;
     let system = "You are a translation engine for on-screen text. Output ONLY a valid JSON array of strings, no markdown fences, no explanations.";
     let user = format!(
         "Translate each element of this JSON array (screen OCR lines) into {to}. \
@@ -853,7 +869,7 @@ pub(crate) async fn widget_translate_lines(
     let api_key2 = api_key.clone();
     let raw = tauri::async_runtime::spawn_blocking(move || {
         lingxi_tools::builtin::translate::chat_completion(
-            &api_key2, &base_url, &model, &system, &user,
+            &api_key2, &base_url, &model, system, &user,
         )
     })
     .await
@@ -862,10 +878,13 @@ pub(crate) async fn widget_translate_lines(
     // Tolerate markdown fences around the JSON some models add.
     let cleaned = {
         let t = raw.trim();
-        let t = t.strip_prefix("```").map(|s| {
-            let s = s.trim_start_matches("json").trim_start_matches("JSON");
-            s
-        }).unwrap_or(t);
+        let t = t
+            .strip_prefix("```")
+            .map(|s| {
+                let s = s.trim_start_matches("json").trim_start_matches("JSON");
+                s
+            })
+            .unwrap_or(t);
         let t = t.strip_suffix("```").unwrap_or(t);
         t.trim()
     };
@@ -899,7 +918,8 @@ pub(crate) async fn widget_translate_lines(
 }
 
 /// In-memory clipboard history (per app session).
-static CLIPBOARD_HISTORY: std::sync::OnceLock<Mutex<Vec<ClipboardEntry>>> = std::sync::OnceLock::new();
+static CLIPBOARD_HISTORY: std::sync::OnceLock<Mutex<Vec<ClipboardEntry>>> =
+    std::sync::OnceLock::new();
 
 #[derive(Clone, serde::Serialize)]
 pub(crate) struct ClipboardEntry {
@@ -928,15 +948,15 @@ pub(crate) fn spawn_clipboard_listener() {
                     // the in-memory history.
                     let text: String = text.chars().take(10_000).collect();
                     if let Ok(mut history) = clipboard_history().lock() {
-                        let duplicate = history
-                            .first()
-                            .map(|e| e.text == text)
-                            .unwrap_or(false);
+                        let duplicate = history.first().map(|e| e.text == text).unwrap_or(false);
                         if !duplicate {
-                            history.insert(0, ClipboardEntry {
-                                text,
-                                time: chrono_like_now(),
-                            });
+                            history.insert(
+                                0,
+                                ClipboardEntry {
+                                    text,
+                                    time: chrono_like_now(),
+                                },
+                            );
                             if history.len() > 50 {
                                 history.truncate(50);
                             }
@@ -951,7 +971,9 @@ pub(crate) fn spawn_clipboard_listener() {
 
 #[tauri::command]
 pub(crate) fn widget_clipboard_history() -> Result<Vec<ClipboardEntry>, String> {
-    let history = clipboard_history().lock().map_err(|e| format!("锁失败: {e}"))?;
+    let history = clipboard_history()
+        .lock()
+        .map_err(|e| format!("锁失败: {e}"))?;
     Ok(history.clone())
 }
 
@@ -959,12 +981,20 @@ pub(crate) fn widget_clipboard_history() -> Result<Vec<ClipboardEntry>, String> 
 pub(crate) fn widget_clipboard_write(text: String) -> Result<(), String> {
     use assistant_windows::write_clipboard_text;
     let now = chrono_like_now();
-    let mut history = clipboard_history().lock().map_err(|e| format!("锁失败: {e}"))?;
+    let mut history = clipboard_history()
+        .lock()
+        .map_err(|e| format!("锁失败: {e}"))?;
     // Avoid duplicates of consecutive identical entries (newest is at index 0).
     if history.first().map(|e| e.text == text).unwrap_or(false) {
         return Ok(());
     }
-    history.insert(0, ClipboardEntry { text: text.clone(), time: now });
+    history.insert(
+        0,
+        ClipboardEntry {
+            text: text.clone(),
+            time: now,
+        },
+    );
     if history.len() > 50 {
         history.truncate(50);
     }
@@ -974,7 +1004,9 @@ pub(crate) fn widget_clipboard_write(text: String) -> Result<(), String> {
 
 #[tauri::command]
 pub(crate) fn widget_clipboard_clear() -> Result<(), String> {
-    let mut history = clipboard_history().lock().map_err(|e| format!("锁失败: {e}"))?;
+    let mut history = clipboard_history()
+        .lock()
+        .map_err(|e| format!("锁失败: {e}"))?;
     history.clear();
     Ok(())
 }
@@ -983,7 +1015,9 @@ pub(crate) fn widget_clipboard_clear() -> Result<(), String> {
 /// clipboard widget actually persists.
 #[tauri::command]
 pub(crate) fn widget_clipboard_remove(text: String) -> Result<(), String> {
-    let mut history = clipboard_history().lock().map_err(|e| format!("锁失败: {e}"))?;
+    let mut history = clipboard_history()
+        .lock()
+        .map_err(|e| format!("锁失败: {e}"))?;
     if let Some(pos) = history.iter().position(|e| e.text == text) {
         history.remove(pos);
     }
@@ -1020,7 +1054,7 @@ fn http_get_text(url: &str) -> Result<String, String> {
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
     // PowerShell sometimes wraps strings in quotes; unwrap them.
     if stdout.starts_with('"') && stdout.ends_with('"') {
-        Ok(stdout[1..stdout.len()-1].replace("\\\"", "\""))
+        Ok(stdout[1..stdout.len() - 1].replace("\\\"", "\""))
     } else {
         Ok(stdout)
     }
@@ -1164,11 +1198,21 @@ pub(crate) async fn widget_save_image(
     let cleaned: String = name
         .chars()
         .filter(|c| !c.is_control())
-        .map(|c| if matches!(c, '\\' | '/' | ':' | '*' | '?' | '"' | '<' | '>' | '|') { '_' } else { c })
+        .map(|c| {
+            if matches!(c, '\\' | '/' | ':' | '*' | '?' | '"' | '<' | '>' | '|') {
+                '_'
+            } else {
+                c
+            }
+        })
         .collect();
     let stem = cleaned.trim();
     let stem = stem.strip_suffix(".png").unwrap_or(stem);
-    let stem = if stem.is_empty() { "lingxi-screenshot" } else { stem };
+    let stem = if stem.is_empty() {
+        "lingxi-screenshot"
+    } else {
+        stem
+    };
 
     let dir = dirs::picture_dir()
         .unwrap_or_else(std::env::temp_dir)

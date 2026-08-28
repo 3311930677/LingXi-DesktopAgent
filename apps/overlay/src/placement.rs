@@ -108,10 +108,7 @@ pub(crate) fn handle_window_moved(app: &AppHandle, label: &str, pos: PhysicalPos
         }
     }
     let mut windows = state.window_state.safe_lock();
-    let entry = window_state::WindowPos {
-        x: pos.x,
-        y: pos.y,
-    };
+    let entry = window_state::WindowPos { x: pos.x, y: pos.y };
     if label == "main" {
         windows.panel = Some(entry);
         state.user_positioned.store(true, Ordering::Relaxed);

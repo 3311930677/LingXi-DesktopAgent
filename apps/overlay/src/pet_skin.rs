@@ -120,13 +120,13 @@ fn sheet_dims(path: &std::path::Path) -> Option<(u32, u32)> {
                 let h = ((v >> 14) & 0x3FFF) + 1;
                 return Some((w, h));
             }
-            b"VP8 " => {
+            b"VP8 "
+                if data.len() >= 30 && data[23] == 0x9D && data[24] == 0x01 && data[25] == 0x2A =>
+            {
                 // 有损帧：3 字节帧标签后跟起始码 9D 01 2A，再是 14 位宽高。
-                if data.len() >= 30 && data[23] == 0x9D && data[24] == 0x01 && data[25] == 0x2A {
-                    let w = ((data[26] as u32 | (data[27] as u32) << 8) & 0x3FFF) + 1;
-                    let h = ((data[28] as u32 | (data[29] as u32) << 8) & 0x3FFF) + 1;
-                    return Some((w, h));
-                }
+                let w = ((data[26] as u32 | (data[27] as u32) << 8) & 0x3FFF) + 1;
+                let h = ((data[28] as u32 | (data[29] as u32) << 8) & 0x3FFF) + 1;
+                return Some((w, h));
             }
             _ => {}
         }
@@ -330,9 +330,10 @@ pub fn load_manifest_at(dir: &Path, id: &str) -> Result<PetSkinManifest, String>
             if !dir.join(name).is_file() {
                 return Err(format!("皮肤 {id} 的 {state} spritesheet 缺失：{name}"));
             }
-            let frame = manifest.frame.as_ref().ok_or_else(|| {
-                format!("皮肤 {id} 使用 spritesheet 但缺少 frame 帧尺寸声明")
-            })?;
+            let frame = manifest
+                .frame
+                .as_ref()
+                .ok_or_else(|| format!("皮肤 {id} 使用 spritesheet 但缺少 frame 帧尺寸声明"))?;
             if frame.width == 0 || frame.height == 0 {
                 return Err(format!("皮肤 {id} 的 frame 尺寸必须为正数"));
             }
@@ -433,21 +434,15 @@ pub fn view_for(
         if let Some(name) = entry.image.as_deref().filter(|n| !n.is_empty()) {
             images.insert(state.clone(), skin_file_url(source, &manifest.id, name));
         } else if let Some(sheet) = entry.sheet.as_deref().filter(|n| !n.is_empty()) {
-            let (cols, rows) = *grids
-                .entry(sheet.to_string())
-                .or_insert_with(|| {
-                    let frame = manifest.frame.as_ref().unwrap_or(&frame_fallback);
-                    skin_dir(&manifest.id)
-                        .map(|dir| sheet_grid(&dir.join(sheet), frame))
-                        .unwrap_or((8, 9))
-                });
+            let (cols, rows) = *grids.entry(sheet.to_string()).or_insert_with(|| {
+                let frame = manifest.frame.as_ref().unwrap_or(&frame_fallback);
+                skin_dir(&manifest.id)
+                    .map(|dir| sheet_grid(&dir.join(sheet), frame))
+                    .unwrap_or((8, 9))
+            });
             // 行号越界保护；frames 不超过一行容纳的列数，避免取帧跨行错位。
             let row = entry.row.unwrap_or(0).min(rows.saturating_sub(1));
-            let frames = entry
-                .frames
-                .unwrap_or(1)
-                .max(1)
-                .min(cols.max(1));
+            let frames = entry.frames.unwrap_or(1).max(1).min(cols.max(1));
             anims.insert(
                 state.clone(),
                 PetSheetAnim {

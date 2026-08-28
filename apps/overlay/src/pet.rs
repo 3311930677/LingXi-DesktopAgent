@@ -58,7 +58,8 @@ pub(crate) fn set_pet_skin(
         drop(settings);
         pet_skin::view_for(&skin_id, &overrides, visible)?
     };
-    app.emit("pet-config-changed", &view).map_err(|e| e.to_string())?;
+    app.emit("pet-config-changed", &view)
+        .map_err(|e| e.to_string())?;
     Ok(view)
 }
 
@@ -99,6 +100,7 @@ pub(crate) fn set_pet_options(
     } else if let Some(pet) = app.get_webview_window("pet") {
         let _ = pet.hide();
     }
-    app.emit("pet-config-changed", &view).map_err(|e| e.to_string())?;
+    app.emit("pet-config-changed", &view)
+        .map_err(|e| e.to_string())?;
     Ok(view)
 }

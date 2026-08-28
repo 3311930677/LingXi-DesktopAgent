@@ -112,7 +112,9 @@ pub fn validate_manifest(manifest: &PluginManifest) -> Result<(), String> {
     }
     if let Some(secs) = manifest.timeout_secs {
         if !(1..=MAX_TIMEOUT_SECS).contains(&secs) {
-            return Err(format!("timeout_secs 必须在 1..={MAX_TIMEOUT_SECS} 之间：{secs}"));
+            return Err(format!(
+                "timeout_secs 必须在 1..={MAX_TIMEOUT_SECS} 之间：{secs}"
+            ));
         }
     }
     Ok(())
@@ -202,10 +204,7 @@ impl Tool for PluginTool {
                 Err(error) => return ToolResult::err(format!("等待插件进程失败：{error}")),
             },
             Err(_) => {
-                return ToolResult::err(format!(
-                    "插件执行超时（{} 秒）",
-                    self.timeout().as_secs()
-                ));
+                return ToolResult::err(format!("插件执行超时（{} 秒）", self.timeout().as_secs()));
             }
         };
         let stdout = String::from_utf8_lossy(&output.stdout);
@@ -286,9 +285,12 @@ mod tests {
 
     #[test]
     fn parse_accepts_valid_manifest_with_defaults() {
-        let manifest =
-            parse_manifest(&manifest_json("demo-tool", "demo_upper", &["python", "main.py"]))
-                .expect("合法清单");
+        let manifest = parse_manifest(&manifest_json(
+            "demo-tool",
+            "demo_upper",
+            &["python", "main.py"],
+        ))
+        .expect("合法清单");
         assert_eq!(manifest.risk_level, "moderate");
         assert_eq!(manifest.timeout_secs, None);
         assert_eq!(manifest.parameters["type"], "object");
@@ -328,9 +330,12 @@ mod tests {
     #[cfg(windows)]
     #[tokio::test]
     async fn plugin_tool_runs_command_and_returns_stdout() {
-        let manifest =
-            parse_manifest(&manifest_json("demo", "demo_echo", &["cmd", "/c", "echo", "hello"]))
-                .expect("合法清单");
+        let manifest = parse_manifest(&manifest_json(
+            "demo",
+            "demo_echo",
+            &["cmd", "/c", "echo", "hello"],
+        ))
+        .expect("合法清单");
         let tool = PluginTool {
             manifest,
             dir: std::env::temp_dir(),
@@ -348,9 +353,12 @@ mod tests {
     #[cfg(windows)]
     #[tokio::test]
     async fn plugin_tool_reports_nonzero_exit() {
-        let manifest =
-            parse_manifest(&manifest_json("demo", "demo_fail", &["cmd", "/c", "exit", "2"]))
-                .expect("合法清单");
+        let manifest = parse_manifest(&manifest_json(
+            "demo",
+            "demo_fail",
+            &["cmd", "/c", "exit", "2"],
+        ))
+        .expect("合法清单");
         let tool = PluginTool {
             manifest,
             dir: std::env::temp_dir(),

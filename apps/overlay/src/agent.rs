@@ -8,8 +8,8 @@ use lingxi_tools::{ConfirmGate, DenyAll, RiskLevel, ToolRegistry};
 use serde::Serialize;
 use tauri::State;
 
-use assistant_inference::{CloudAgentBackend, CloudConfig};
 use crate::state::{AppState, MutexExt};
+use assistant_inference::{CloudAgentBackend, CloudConfig};
 
 fn default_agent_working_dir() -> std::path::PathBuf {
     dirs::document_dir()
@@ -179,8 +179,12 @@ pub(crate) fn agent_reset(state: State<AppState>) -> Result<(), String> {
 #[tauri::command]
 pub(crate) fn list_tools(state: State<AppState>) -> Vec<ToolView> {
     let reg = state.tool_registry.safe_lock();
-    let plugin_names: Vec<String> =
-        state.plugin_tool_map.safe_lock().values().cloned().collect();
+    let plugin_names: Vec<String> = state
+        .plugin_tool_map
+        .safe_lock()
+        .values()
+        .cloned()
+        .collect();
     reg.all_schemas()
         .iter()
         .map(|s| {
@@ -202,7 +206,11 @@ pub(crate) fn list_tools(state: State<AppState>) -> Vec<ToolView> {
 
 /// Enable or disable a tool by name.
 #[tauri::command]
-pub(crate) fn toggle_tool(state: State<AppState>, name: String, enabled: bool) -> Result<(), String> {
+pub(crate) fn toggle_tool(
+    state: State<AppState>,
+    name: String,
+    enabled: bool,
+) -> Result<(), String> {
     let mut reg = state.tool_registry.safe_lock();
     let risk = reg
         .risk_of(&name)

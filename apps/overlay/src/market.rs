@@ -81,8 +81,11 @@ pub struct MarketItem {
 
 /// 内置清单定位：内置皮肤根（ui/assets/skins）的上级目录下 market/market.json。
 pub fn builtin_catalog_path() -> Option<PathBuf> {
-    pet_skin::skins_dir()
-        .and_then(|skins| skins.parent().map(|assets| assets.join("market").join("market.json")))
+    pet_skin::skins_dir().and_then(|skins| {
+        skins
+            .parent()
+            .map(|assets| assets.join("market").join("market.json"))
+    })
 }
 
 /// 插件根目录：%APPDATA%/lingxi/plugins（工具插件下载落位点）。
@@ -304,8 +307,8 @@ fn download_to(url: &str, dest_path: &Path) -> Result<String, String> {
         .call()
         .map_err(|error| format!("下载失败：{error}"))?;
     let mut reader = response.into_reader();
-    let file = std::fs::File::create(dest_path)
-        .map_err(|error| format!("创建下载文件失败：{error}"))?;
+    let file =
+        std::fs::File::create(dest_path).map_err(|error| format!("创建下载文件失败：{error}"))?;
     let mut writer = std::io::BufWriter::new(file);
     let mut hasher = Sha256::new();
     let mut buffer = [0u8; 64 * 1024];
@@ -464,7 +467,9 @@ pub(crate) fn market_install(
         return Err(error);
     }
     let _ = std::fs::remove_file(&zip_path);
-    if let Err(error) = flatten_single_root(&tmp_dir, if is_tool { "tool.json" } else { "skin.json" }) {
+    if let Err(error) =
+        flatten_single_root(&tmp_dir, if is_tool { "tool.json" } else { "skin.json" })
+    {
         cleanup(&tmp_dir);
         return Err(error);
     }
@@ -574,8 +579,7 @@ pub(crate) fn market_uninstall(
             .safe_lock()
             .remove(&plugin.manifest().name);
         state.plugin_tool_map.safe_lock().remove(&id);
-        std::fs::remove_dir_all(&target)
-            .map_err(|error| format!("删除插件目录失败：{error}"))?;
+        std::fs::remove_dir_all(&target).map_err(|error| format!("删除插件目录失败：{error}"))?;
         return Ok(());
     }
     match pet_skin::skin_source(&id) {
@@ -583,8 +587,7 @@ pub(crate) fn market_uninstall(
         Some(_) => return Err("内置皮肤不可删除".into()),
         None => return Err("皮肤不存在".into()),
     }
-    let user_root =
-        pet_skin::user_skins_dir().ok_or_else(|| "无法定位用户皮肤目录".to_string())?;
+    let user_root = pet_skin::user_skins_dir().ok_or_else(|| "无法定位用户皮肤目录".to_string())?;
     let target = user_root.join(&id);
     if !target.starts_with(&user_root) {
         return Err("非法的皮肤路径".into());
@@ -603,10 +606,7 @@ pub(crate) fn market_uninstall(
 /// 回落默认皮肤：完整复刻 `pet.rs::set_pet_skin` 的既有模式
 /// （校验默认皮肤可加载 → 锁内改配置并持久化 → 解锁重建视图 → 广播）。
 /// 与 market_install 末尾"尽力广播"不同，这里用 `?` 上抛：回落失败必须中止删除。
-fn switch_to_default_skin(
-    app: &tauri::AppHandle,
-    state: &State<AppState>,
-) -> Result<(), String> {
+fn switch_to_default_skin(app: &tauri::AppHandle, state: &State<AppState>) -> Result<(), String> {
     let default_id = pet_skin::DEFAULT_SKIN_ID;
     // 先确认默认皮肤清单可加载（内置皮肤正常必然成功，双保险）。
     pet_skin::load_manifest(default_id)?;
@@ -688,11 +688,31 @@ mod tests {
     #[test]
     fn sanitize_rejects_bad_entries() {
         assert!(sanitize_entry(demo_entry()).is_some());
-        assert!(sanitize_entry(MarketEntry { id: "../evil".into(), ..demo_entry() }).is_none());
-        assert!(sanitize_entry(MarketEntry { id: String::new(), ..demo_entry() }).is_none());
-        assert!(sanitize_entry(MarketEntry { url: "ftp://x/a.zip".into(), ..demo_entry() }).is_none());
-        assert!(sanitize_entry(MarketEntry { sha256: "abc".into(), ..demo_entry() }).is_none());
-        assert!(sanitize_entry(MarketEntry { name: "  ".into(), ..demo_entry() }).is_none());
+        assert!(sanitize_entry(MarketEntry {
+            id: "../evil".into(),
+            ..demo_entry()
+        })
+        .is_none());
+        assert!(sanitize_entry(MarketEntry {
+            id: String::new(),
+            ..demo_entry()
+        })
+        .is_none());
+        assert!(sanitize_entry(MarketEntry {
+            url: "ftp://x/a.zip".into(),
+            ..demo_entry()
+        })
+        .is_none());
+        assert!(sanitize_entry(MarketEntry {
+            sha256: "abc".into(),
+            ..demo_entry()
+        })
+        .is_none());
+        assert!(sanitize_entry(MarketEntry {
+            name: "  ".into(),
+            ..demo_entry()
+        })
+        .is_none());
     }
 
     #[test]
@@ -709,8 +729,16 @@ mod tests {
 
     #[test]
     fn sanitize_rejects_unknown_kind() {
-        assert!(sanitize_entry(MarketEntry { kind: "widget".into(), ..demo_entry() }).is_none());
-        assert!(sanitize_entry(MarketEntry { kind: "tool".into(), ..demo_entry() }).is_some());
+        assert!(sanitize_entry(MarketEntry {
+            kind: "widget".into(),
+            ..demo_entry()
+        })
+        .is_none());
+        assert!(sanitize_entry(MarketEntry {
+            kind: "tool".into(),
+            ..demo_entry()
+        })
+        .is_some());
         // 缺省 kind = skin（旧清单向后兼容）
         let legacy = r#"{"entries":[{"id":"s","name":"n","version":"1","url":"https://e.com/a.zip","sha256":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}]}"#;
         let catalog = parse_catalog(legacy).expect("旧清单应兼容");

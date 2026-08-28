@@ -36,7 +36,9 @@ pub(crate) struct DraftWriteResult {
 /// and group member rosters. Reading the user's explicit selection is the
 /// only reliable source of truth for "which message to reply to".
 #[tauri::command]
-pub(crate) async fn qq_poll_latest(_state: State<'_, AppState>) -> Result<Option<QqMessageView>, String> {
+pub(crate) async fn qq_poll_latest(
+    _state: State<'_, AppState>,
+) -> Result<Option<QqMessageView>, String> {
     let info = tauri::async_runtime::spawn_blocking(resolve_qq_window)
         .await
         .map_err(|e| format!("foreground probe failed: {e}"))?;
@@ -63,7 +65,9 @@ pub(crate) async fn qq_poll_latest(_state: State<'_, AppState>) -> Result<Option
 /// non-empty selection — so the DOM selection survives even after the panel
 /// steals keyboard focus.
 #[tauri::command]
-pub(crate) async fn capture_qq_selection(_state: State<'_, AppState>) -> Result<QqMessageView, String> {
+pub(crate) async fn capture_qq_selection(
+    _state: State<'_, AppState>,
+) -> Result<QqMessageView, String> {
     let (info, message) = tauri::async_runtime::spawn_blocking(|| {
         let info = resolve_qq_window();
         let text = capture_qq_selection_text();
@@ -89,7 +93,10 @@ pub(crate) async fn capture_qq_selection(_state: State<'_, AppState>) -> Result<
 }
 
 #[tauri::command]
-pub(crate) async fn generate_qq_draft(state: State<'_, AppState>, message: String) -> Result<String, String> {
+pub(crate) async fn generate_qq_draft(
+    state: State<'_, AppState>,
+    message: String,
+) -> Result<String, String> {
     if message.trim().is_empty() {
         return Err("没有可回复的 QQ 消息".into());
     }

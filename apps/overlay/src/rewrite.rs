@@ -48,7 +48,11 @@ fn backend_signature(settings: &BackendSettings) -> String {
     )
 }
 
-pub(crate) fn run_model(settings: &BackendSettings, task: ModelTask, input: &str) -> Result<String, String> {
+pub(crate) fn run_model(
+    settings: &BackendSettings,
+    task: ModelTask,
+    input: &str,
+) -> Result<String, String> {
     match settings.backend.as_str() {
         "local" => LocalBackend
             .complete(task, input)
@@ -182,7 +186,10 @@ pub(crate) async fn preview_transform(
 /// only falls back to a fresh (blocking) inference if no matching preview
 /// exists.
 #[tauri::command]
-pub(crate) async fn apply_transform(state: State<'_, AppState>, mode: String) -> Result<(), String> {
+pub(crate) async fn apply_transform(
+    state: State<'_, AppState>,
+    mode: String,
+) -> Result<(), String> {
     let snapshot = state
         .snapshot
         .lock()

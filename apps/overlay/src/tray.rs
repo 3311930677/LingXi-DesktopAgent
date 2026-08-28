@@ -18,14 +18,8 @@ pub(crate) fn install_tray(app: &AppHandle) -> tauri::Result<()> {
     let widget_items: Vec<_> = crate::widgets::builtin_widgets()
         .iter()
         .map(|w| {
-            MenuItem::with_id(
-                app,
-                format!("widget:{}", w.id),
-                w.label.to_string(),
-                true,
-                None::<&str>,
-            )
-            .expect("failed to create widget menu item")
+            MenuItem::with_id(app, format!("widget:{}", w.id), w.label, true, None::<&str>)
+                .expect("failed to create widget menu item")
         })
         .collect();
 
@@ -37,7 +31,17 @@ pub(crate) fn install_tray(app: &AppHandle) -> tauri::Result<()> {
 
     let quit = MenuItem::with_id(app, "tray:quit", "退出灵犀", true, None::<&str>)?;
     let separator = PredefinedMenuItem::separator(app)?;
-    let menu = Menu::with_items(app, &[&show_panel, &hide_panel, &separator, &widget_submenu, &separator, &quit])?;
+    let menu = Menu::with_items(
+        app,
+        &[
+            &show_panel,
+            &hide_panel,
+            &separator,
+            &widget_submenu,
+            &separator,
+            &quit,
+        ],
+    )?;
     eprintln!("[lingxi] install_tray: menu created, getting icon...");
     let icon = app
         .default_window_icon()

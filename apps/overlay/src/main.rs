@@ -19,11 +19,11 @@
 
 mod agent;
 mod hotkeys;
+mod market;
 mod panel;
-mod placement;
 mod pet;
 mod pet_skin;
-mod market;
+mod placement;
 mod qq;
 mod rewrite;
 // OwO 迁移前的旧键盘钩子实现，仅作参考。整个文件编译期排除，稳定后删除。
@@ -55,7 +55,7 @@ fn main() {
             rewrite::trigger_transform,
             panel::hide_overlay,
             panel::start_window_drag,
-panel::move_pet_by,
+            panel::move_pet_by,
             panel::start_window_resize,
             settings::get_backend_settings,
             settings::save_backend_settings,
@@ -150,10 +150,17 @@ panel::move_pet_by,
                 panel::make_non_activating(&window).map_err(std::io::Error::other)?;
                 let size = window.outer_size().unwrap_or(PhysicalSize::new(220, 260));
                 let restored = saved.pet.filter(|pos| {
-                    placement::position_on_screen(pos.x, pos.y, size.width as i32, size.height as i32)
+                    placement::position_on_screen(
+                        pos.x,
+                        pos.y,
+                        size.width as i32,
+                        size.height as i32,
+                    )
                 });
                 match restored {
-                    Some(pos) => placement::set_position_tracked(app.handle(), &window, pos.x, pos.y),
+                    Some(pos) => {
+                        placement::set_position_tracked(app.handle(), &window, pos.x, pos.y)
+                    }
                     None => placement::position_pet(app.handle(), &window),
                 }
                 // 配置里 visible:false 避免先在默认位置闪现再跳到恢复位置；

@@ -17,19 +17,13 @@ pub fn capture_screen() -> Result<CapturedImage, String> {
 }
 
 #[cfg(windows)]
-pub fn capture_region(
-    x: i32,
-    y: i32,
-    width: i32,
-    height: i32,
-) -> Result<CapturedImage, String> {
+pub fn capture_region(x: i32, y: i32, width: i32, height: i32) -> Result<CapturedImage, String> {
+    use windows::Win32::Foundation::HWND;
     use windows::Win32::Graphics::Gdi::{
-        BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject,
-        GetDIBits, GetDC, ReleaseDC, SelectObject, BITMAPINFO, BITMAPINFOHEADER,
-        DIB_RGB_COLORS, SRCCOPY,
+        BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, GetDC,
+        GetDIBits, ReleaseDC, SelectObject, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS, SRCCOPY,
     };
     use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN};
-    use windows::Win32::Foundation::HWND;
 
     let screen_w = unsafe { GetSystemMetrics(SM_CXSCREEN) };
     let screen_h = unsafe { GetSystemMetrics(SM_CYSCREEN) };
@@ -37,8 +31,16 @@ pub fn capture_region(
         return Err("无法获取屏幕尺寸".to_string());
     }
 
-    let w = if width > 0 { width.min(screen_w) } else { screen_w };
-    let h = if height > 0 { height.min(screen_h) } else { screen_h };
+    let w = if width > 0 {
+        width.min(screen_w)
+    } else {
+        screen_w
+    };
+    let h = if height > 0 {
+        height.min(screen_h)
+    } else {
+        screen_h
+    };
     let off_x = x.clamp(0, screen_w - 1);
     let off_y = y.clamp(0, screen_h - 1);
 
@@ -60,9 +62,7 @@ pub fn capture_region(
         }
         let old_bmp = unsafe { SelectObject(hdc_mem, bmp) };
 
-        let bit_result = unsafe {
-            BitBlt(hdc_mem, 0, 0, w, h, hdc_screen, off_x, off_y, SRCCOPY)
-        };
+        let bit_result = unsafe { BitBlt(hdc_mem, 0, 0, w, h, hdc_screen, off_x, off_y, SRCCOPY) };
         if bit_result.is_err() {
             unsafe {
                 let _ = SelectObject(hdc_mem, old_bmp);
@@ -111,7 +111,7 @@ pub fn capture_region(
         }
 
         // GDI returns BGRA; convert to RGBA for PNG encoding.
-        for chunk in rgba.chunks_exact_mut(4) {
+        for chunk in rgba.as_chunks_mut::<4>().0 {
             chunk.swap(0, 2);
         }
 
@@ -120,10 +120,16 @@ pub fn capture_region(
             let _ = DeleteObject(bmp);
             let _ = DeleteDC(hdc_mem);
         }
-        Ok(CapturedImage { width: w, height: h, rgba })
+        Ok(CapturedImage {
+            width: w,
+            height: h,
+            rgba,
+        })
     })();
 
-    unsafe { let _ = ReleaseDC(hwnd, hdc_screen); }
+    unsafe {
+        let _ = ReleaseDC(hwnd, hdc_screen);
+    }
     result
 }
 
@@ -153,12 +159,7 @@ pub fn capture_screen_as_data_url() -> Result<String, String> {
 }
 
 #[cfg(windows)]
-pub fn capture_region_as_data_url(
-    x: i32,
-    y: i32,
-    w: i32,
-    h: i32,
-) -> Result<String, String> {
+pub fn capture_region_as_data_url(x: i32, y: i32, w: i32, h: i32) -> Result<String, String> {
     let img = capture_region(x, y, w, h)?;
     let png = encode_png(&img)?;
     let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &png);
@@ -167,8 +168,8 @@ pub fn capture_region_as_data_url(
 
 #[cfg(windows)]
 pub fn read_pixel(x: i32, y: i32) -> Result<(u8, u8, u8), String> {
-    use windows::Win32::Graphics::Gdi::{GetDC, GetPixel, ReleaseDC};
     use windows::Win32::Foundation::HWND;
+    use windows::Win32::Graphics::Gdi::{GetDC, GetPixel, ReleaseDC};
 
     let hwnd = HWND(std::ptr::null_mut());
     let hdc = unsafe { GetDC(hwnd) };
@@ -176,7 +177,9 @@ pub fn read_pixel(x: i32, y: i32) -> Result<(u8, u8, u8), String> {
         return Err("GetDC 失败".to_string());
     }
     let color = unsafe { GetPixel(hdc, x, y) };
-    unsafe { let _ = ReleaseDC(hwnd, hdc); }
+    unsafe {
+        let _ = ReleaseDC(hwnd, hdc);
+    }
     // COLORREF is 0x00BBGGRR
     Ok((
         (color.0 & 0xFF) as u8,
@@ -196,12 +199,7 @@ pub fn capture_screen_as_data_url() -> Result<String, String> {
 }
 
 #[cfg(not(windows))]
-pub fn capture_region_as_data_url(
-    _x: i32,
-    _y: i32,
-    _w: i32,
-    _h: i32,
-) -> Result<String, String> {
+pub fn capture_region_as_data_url(_x: i32, _y: i32, _w: i32, _h: i32) -> Result<String, String> {
     Err("capture_region 仅支持 Windows".to_string())
 }
 

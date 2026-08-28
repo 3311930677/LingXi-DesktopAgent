@@ -191,9 +191,17 @@ fn rewrite(file: &Path, items: &[Reminder]) -> Result<(), String> {
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::sync::atomic::{AtomicU64, Ordering};
 
     fn temp_root() -> PathBuf {
-        let root = std::env::temp_dir().join(format!("lingxi-reminder-test-{}", now_nanos()));
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!(
+            "lingxi-reminder-test-{}-{}-{}",
+            std::process::id(),
+            now_nanos(),
+            n
+        ));
         fs::create_dir_all(&root).unwrap();
         root
     }
